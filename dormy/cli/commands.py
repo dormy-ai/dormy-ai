@@ -79,5 +79,37 @@ def topup(amount: int = 20) -> None:
     typer.echo(f"[TODO Week 4] `dormy topup ${amount}` — Stripe Checkout URL")
 
 
+# ---------------------------------------------------------------------------
+# Week 1 diagnostics
+# ---------------------------------------------------------------------------
+
+
+@app.command("db-ping")
+def db_ping() -> None:
+    """Verify Supabase Postgres connectivity and schema."""
+    import asyncio
+
+    from dormy.db import close_pool, ping
+
+    async def _run() -> None:
+        try:
+            result = await ping()
+        finally:
+            await close_pool()
+
+        if result["ok"]:
+            typer.secho("✓ Connected", fg=typer.colors.GREEN, bold=True)
+        else:
+            typer.secho("✗ Connection responded but SELECT 1 failed", fg=typer.colors.RED)
+            raise typer.Exit(1)
+
+        typer.echo(f"  Postgres: {result['postgres_version']}")
+        typer.echo(f"  Tables in public schema ({result['table_count']}):")
+        for name in result["tables"]:
+            typer.echo(f"    - {name}")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()
