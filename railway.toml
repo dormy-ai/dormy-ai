@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -m dormy.mcp.server"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

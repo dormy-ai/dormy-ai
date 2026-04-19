@@ -1,0 +1,31 @@
+# Newsletter / web sources for dormy_memory_recall L2 knowledge base.
+# Consumed by dormy/knowledge/ingest.py (Week 3).
+
+sources:
+  - name: Fletch PMM
+    type: rss
+    url: https://fletchpmm.beehiiv.com/feed
+    tags: [gtm, positioning]
+
+  - name: Not Boring (Packy McCormick)
+    type: rss
+    url: https://www.notboring.co/feed
+    tags: [fundraising, market]
+
+  - name: Lenny's Newsletter
+    type: rss
+    url: https://www.lennysnewsletter.com/feed
+    tags: [gtm, product]
+
+  - name: Startups Gallery News
+    type: rss_or_scrape
+    url: https://startups.gallery/news
+    tags: [fundraising, trends, active-vcs]
+
+  - name: Stratechery (paid)
+    type: email_forward
+    forward_to: newsletter@inbox.heydormy.ai
+    tags: [strategy]
+
+  # Add more sources here as needed.
+  # 'type' options: rss | rss_or_scrape | email_forward
