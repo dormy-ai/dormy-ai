@@ -93,6 +93,108 @@ def mcp_serve() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Week 2 — knowledge & contacts ingest
+# ---------------------------------------------------------------------------
+
+knowledge_app = typer.Typer(help="Ingest Obsidian vault content into Supabase.")
+contacts_app = typer.Typer(help="Manage Inner Circle contacts (import / list).")
+app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(contacts_app, name="contacts")
+
+
+@knowledge_app.command("sync")
+def knowledge_sync(
+    vault: Optional[str] = typer.Option(
+        None,
+        "--vault",
+        help="Path to Dormy/ folder in the Obsidian vault. Defaults to DORMY_OBSIDIAN_VAULT_PATH.",
+    ),
+) -> None:
+    """Walk <vault>/Network/{Investors,Advisors}/*.md and upsert to contacts table."""
+    import asyncio
+
+    from dormy.knowledge.ingest import sync_contacts_from_vault
+
+    stats = asyncio.run(sync_contacts_from_vault(vault))
+    typer.secho(
+        f"✓ {stats.upserted} upserted · {stats.skipped} skipped · {stats.scanned} scanned",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+
+
+@contacts_app.command("import")
+def contacts_import(
+    csv_path: str = typer.Argument(..., help="CSV file with header row"),
+    tier: str = typer.Option(
+        "inner",
+        "--tier",
+        help="Override tier for all rows (inner | public | discovered)",
+    ),
+) -> None:
+    """Bulk-import contacts from a CSV. Columns: name,role,firm,email,sectors,stages,linkedin_url,twitter_url,personal_notes,warm_intro_path,tags,recent_activity,red_flags.
+
+    `sectors`/`stages`/`tags` accept semicolon-separated values (e.g. 'ai-infra;dev-tools').
+    """
+    import asyncio
+    import csv
+
+    import asyncpg
+
+    from dormy.config import settings
+    from dormy.knowledge.ingest import upsert_contact
+
+    def _split(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        return [s.strip() for s in raw.split(";") if s.strip()]
+
+    async def _run() -> None:
+        if not settings.database_url:
+            typer.secho("DORMY_DATABASE_URL not set", fg=typer.colors.RED)
+            raise typer.Exit(1)
+
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        if not rows:
+            typer.echo("No rows in CSV")
+            return
+
+        conn = await asyncpg.connect(settings.database_url, statement_cache_size=0)
+        upserted = 0
+        try:
+            for i, row in enumerate(rows, 1):
+                fm = {
+                    "name": row.get("name"),
+                    "role": row.get("role"),
+                    "tier": row.get("tier") or tier,
+                    "firm": row.get("firm"),
+                    "email": row.get("email"),
+                    "sectors": _split(row.get("sectors")),
+                    "stages": _split(row.get("stages")),
+                    "linkedin_url": row.get("linkedin_url"),
+                    "twitter_url": row.get("twitter_url"),
+                    "personal_notes": row.get("personal_notes"),
+                    "warm_intro_path": row.get("warm_intro_path"),
+                    "tags": _split(row.get("tags")),
+                    "recent_activity": row.get("recent_activity"),
+                    "red_flags": row.get("red_flags"),
+                }
+                source_path = f"csv-import/{csv_path}#row={i}"
+                wrote = await upsert_contact(
+                    conn, source_path=source_path, frontmatter=fm
+                )
+                if wrote:
+                    upserted += 1
+        finally:
+            await conn.close()
+
+        typer.secho(f"✓ {upserted} contacts upserted from {csv_path}", fg=typer.colors.GREEN)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # Week 1 diagnostics
 # ---------------------------------------------------------------------------
 
