@@ -80,6 +80,19 @@ def topup(amount: int = 20) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Week 2 — MCP server
+# ---------------------------------------------------------------------------
+
+
+@app.command("mcp-serve")
+def mcp_serve() -> None:
+    """Run the Dormy MCP server over stdio (for local Claude Code / Cursor)."""
+    from dormy.mcp.server import main as mcp_main
+
+    mcp_main()
+
+
+# ---------------------------------------------------------------------------
 # Week 1 diagnostics
 # ---------------------------------------------------------------------------
 
