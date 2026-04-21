@@ -109,18 +109,49 @@ def knowledge_sync(
         "--vault",
         help="Path to Dormy/ folder in the Obsidian vault. Defaults to DORMY_OBSIDIAN_VAULT_PATH.",
     ),
+    contacts_only: bool = typer.Option(
+        False, "--contacts-only", help="Skip the knowledge_chunks ingest"
+    ),
+    knowledge_only: bool = typer.Option(
+        False, "--knowledge-only", help="Skip the contacts ingest"
+    ),
+    max_files: Optional[int] = typer.Option(
+        None, "--max-files", help="Cap on knowledge files to process (useful for first runs)"
+    ),
 ) -> None:
-    """Walk <vault>/Network/{Investors,Advisors}/*.md and upsert to contacts table."""
+    """Sync Obsidian vault into Supabase.
+
+    By default this runs both passes:
+    1. Network/{Investors,Advisors}/*.md  →  contacts table
+    2. Fundraising/ + GTM/ + Playbooks/   →  knowledge_chunks (chunked + embedded)
+    """
     import asyncio
 
-    from dormy.knowledge.ingest import sync_contacts_from_vault
+    async def _run() -> None:
+        if not knowledge_only:
+            from dormy.knowledge.ingest import sync_contacts_from_vault
 
-    stats = asyncio.run(sync_contacts_from_vault(vault))
-    typer.secho(
-        f"✓ {stats.upserted} upserted · {stats.skipped} skipped · {stats.scanned} scanned",
-        fg=typer.colors.GREEN,
-        bold=True,
-    )
+            stats = await sync_contacts_from_vault(vault)
+            typer.secho(
+                f"✓ contacts: {stats.upserted} upserted · {stats.skipped} skipped "
+                f"· {stats.scanned} scanned",
+                fg=typer.colors.GREEN,
+                bold=True,
+            )
+
+        if not contacts_only:
+            from dormy.knowledge.knowledge_ingest import sync_knowledge_from_vault
+
+            stats = await sync_knowledge_from_vault(vault, max_files=max_files)
+            typer.secho(
+                f"✓ knowledge: {stats.files_scanned} files → "
+                f"{stats.chunks_written} chunks ({stats.files_skipped} skipped, "
+                f"{len(stats.errors)} errors)",
+                fg=typer.colors.GREEN,
+                bold=True,
+            )
+
+    asyncio.run(_run())
 
 
 @contacts_app.command("import")

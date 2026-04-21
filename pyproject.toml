@@ -42,6 +42,7 @@ dependencies = [
     # External APIs
     "tavily-python>=0.3.0",
     "stripe>=7.0.0",
+    "feedparser>=6.0.0",
 
     # Notifications
     "resend>=0.7.0",
