@@ -24,6 +24,13 @@ from pydantic import BaseModel, Field
 from dormy.config import settings
 from dormy.mcp.mocks import EXTERNAL_ACTIVE_VCS, INNER_CIRCLE_CONTACTS
 
+# dormy-fundingnews is an editable sibling package that produces the Active VC feed.
+# Optional import — if unavailable, external_active falls back to mock.
+try:
+    from dormy_fundingnews.api import get_active_vcs as _fundingnews_get_active_vcs
+except Exception:  # pragma: no cover
+    _fundingnews_get_active_vcs = None
+
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
@@ -97,16 +104,33 @@ def _mock_to_match(c: dict, tier: str, fit: float, rationale: str) -> InvestorMa
     )
 
 
-def _build_from_mock(
+async def _build_from_mock(
     sector: str | None, stage: str | None, n: int
 ) -> FindInvestorsResult:
     filt_inner = _filter_mock(INNER_CIRCLE_CONTACTS, sector, stage)
-    filt_ext = _filter_mock(EXTERNAL_ACTIVE_VCS, sector, stage)
     half = max(1, len(filt_inner) // 2)
     active_cut, resting_cut = filt_inner[:half], filt_inner[half:]
     rationale_active = f"Matches {sector or 'your'} sector + {stage or 'your stage'}; made a relevant check recently."
     rationale_resting = f"Matches {sector or 'your'} sector but hasn't deployed recently."
-    rationale_external = f"Actively deploying in {sector or 'your sector'} — needs warm intro."
+
+    ext_rows, ext_source = await _query_external_active(sector, stage, n)
+    if ext_source == "dormy-fundingnews":
+        external = [
+            _mock_to_match(
+                c,
+                "external_active",
+                0.72 - i * 0.02,
+                f"Active in {sector or 'your sector'}: {c.get('recent_activity') or 'recent deal'}.",
+            )
+            for i, c in enumerate(ext_rows[:n])
+        ]
+    else:
+        rationale_external = f"Actively deploying in {sector or 'your sector'} — needs warm intro (source: {ext_source})."
+        external = [
+            _mock_to_match(c, "external_active", 0.72 - i * 0.02, rationale_external)
+            for i, c in enumerate(ext_rows[:n])
+        ]
+
     return FindInvestorsResult(
         inner_circle_active=[
             _mock_to_match(c, "inner_circle_active", 0.94 - i * 0.02, rationale_active)
@@ -116,16 +140,16 @@ def _build_from_mock(
             _mock_to_match(c, "inner_circle_resting", 0.78 - i * 0.02, rationale_resting)
             for i, c in enumerate(resting_cut[:n])
         ],
-        external_active=[
-            _mock_to_match(c, "external_active", 0.72 - i * 0.02, rationale_external)
-            for i, c in enumerate(filt_ext[:n])
-        ],
+        external_active=external,
         summary=(
-            f"Found from mock: {len(active_cut)} ⭐⭐, {len(resting_cut)} ⭐, "
-            f"{len(filt_ext)} 🔍 for sector={sector or 'any'}, stage={stage or 'any'}."
+            f"Found {len(active_cut)} ⭐⭐, {len(resting_cut)} ⭐, "
+            f"{len(external)} 🔍 for sector={sector or 'any'}, stage={stage or 'any'}."
         ),
-        data_source="mock",
-        note="⚠️ MOCK DATA (DB empty or unreachable). Run `dormy knowledge sync`.",
+        data_source=f"mock+{ext_source}",
+        note=(
+            f"Inner Circle is mock (run `dormy knowledge sync` to activate Supabase). "
+            f"external_active sourced from {ext_source}."
+        ),
     )
 
 
@@ -198,7 +222,29 @@ def _db_row_to_match(row: dict, tier: str, fit: float, rationale: str) -> Invest
     )
 
 
-def _build_from_db(
+async def _query_external_active(
+    sector: str | None, stage: str | None, n: int
+) -> tuple[list[dict], str]:
+    """
+    Pull external active VCs from the dormy-fundingnews feed (recent funding events).
+    Falls back to the in-repo EXTERNAL_ACTIVE_VCS mock if the feed package is
+    unavailable or errors. Returns (list_of_vcs, source_tag).
+    """
+    if _fundingnews_get_active_vcs is None:
+        return _filter_mock(EXTERNAL_ACTIVE_VCS, sector, stage), "mock"
+    try:
+        vcs = await _fundingnews_get_active_vcs(
+            sector=sector, stage=stage, days=90, limit=n
+        )
+    except Exception as e:
+        logger.warning(f"dormy-fundingnews.get_active_vcs failed, falling back to mock: {e}")
+        return _filter_mock(EXTERNAL_ACTIVE_VCS, sector, stage), "mock"
+    if not vcs:
+        return _filter_mock(EXTERNAL_ACTIVE_VCS, sector, stage), "mock-empty-feed"
+    return vcs, "dormy-fundingnews"
+
+
+async def _build_from_db(
     rows: list[dict], sector: str | None, stage: str | None, n: int
 ) -> FindInvestorsResult:
     # Split by "has recent_rounds?" — proxy for "currently active".
@@ -224,16 +270,28 @@ def _build_from_db(
         for i, r in enumerate(resting[:n])
     ]
 
-    # external_active still from mock — Week 3 adds startups.gallery-sourced data
-    filt_ext = _filter_mock(EXTERNAL_ACTIVE_VCS, sector, stage)
-    external = [
-        _mock_to_match(
-            c, "external_active", 0.72 - i * 0.02,
-            f"Actively deploying in {sector or 'your sector'} — needs warm intro "
-            "(source: mock, startups.gallery integration in Week 3).",
-        )
-        for i, c in enumerate(filt_ext[:n])
-    ]
+    ext_rows, ext_source = await _query_external_active(sector, stage, n)
+    if ext_source == "dormy-fundingnews":
+        external = [
+            _mock_to_match(
+                c,
+                "external_active",
+                0.72 - i * 0.02,
+                f"Active in {sector or 'your sector'}: {c.get('recent_activity') or 'recent deal'}.",
+            )
+            for i, c in enumerate(ext_rows[:n])
+        ]
+    else:
+        external = [
+            _mock_to_match(
+                c,
+                "external_active",
+                0.72 - i * 0.02,
+                f"Actively deploying in {sector or 'your sector'} — needs warm intro "
+                f"(source: {ext_source}).",
+            )
+            for i, c in enumerate(ext_rows[:n])
+        ]
 
     summary = (
         f"Found {len(inner_active) + len(inner_resting)} Inner Circle + "
@@ -246,10 +304,10 @@ def _build_from_db(
         inner_circle_resting=inner_resting,
         external_active=external,
         summary=summary,
-        data_source="supabase",
+        data_source=f"supabase+{ext_source}",
         note=(
-            "Inner Circle data from Supabase contacts (15 seeds). "
-            "external_active still mock — real startups.gallery feed lands Week 3."
+            "Inner Circle data from Supabase contacts. external_active sourced from "
+            f"{ext_source} (dormy-fundingnews = live feed of recent funding events)."
         ),
     )
 
@@ -286,10 +344,10 @@ def register(mcp: "FastMCP") -> None:
             rows = await _query_inner_contacts(sector, stage)
         except Exception as e:
             logger.warning(f"contacts query failed, falling back to mock: {e}")
-            return _build_from_mock(sector, stage, n)
+            return await _build_from_mock(sector, stage, n)
 
         if not rows:
             logger.info("contacts table returned 0 rows — falling back to mock")
-            return _build_from_mock(sector, stage, n)
+            return await _build_from_mock(sector, stage, n)
 
-        return _build_from_db(rows, sector, stage, n)
+        return await _build_from_db(rows, sector, stage, n)

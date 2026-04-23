@@ -10,46 +10,38 @@ requires-python = ">=3.11"
 dependencies = [
     # Core agent framework (nanobot is the runtime)
     "nanobot-ai>=0.1.5,<0.2",
-
     # MCP server (Anthropic Python SDK)
     "mcp>=1.0.0",
-
     # CLI
     "typer>=0.12.0",
     "rich>=13.0",
-
     # Config + logging
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "python-dotenv>=1.0.0",
     "loguru>=0.7.0",
-
     # Database (connect directly to Supabase Postgres via asyncpg —
     # the supabase-py SDK has httpx/websockets conflicts with nanobot-ai)
     "sqlalchemy[asyncio]>=2.0.0",
     "asyncpg>=0.29.0",
     "pgvector>=0.2.5",
-
     # LLM providers
     "openai>=1.10.0",
     "anthropic>=0.18.0",
     "httpx>=0.26.0",
-
     # Knowledge / RAG
     "langchain-text-splitters>=0.0.1",
     "tiktoken>=0.6.0",
-
     # External APIs
     "tavily-python>=0.3.0",
     "stripe>=7.0.0",
     "feedparser>=6.0.0",
-
     # Notifications
     "resend>=0.7.0",
     "python-telegram-bot>=21.0",
-
     # Utilities
     "pyyaml>=6.0",
+    "dormy-fundingnews",
 ]
 
 [project.optional-dependencies]
@@ -79,3 +71,6 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.uv.sources]
+dormy-fundingnews = { path = "../../dormy-fundingnews", editable = true }
