@@ -2,6 +2,12 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "python -m dormy.mcp.server"
+# Public hosted endpoint (mcp.heydormy.ai). HTTP transport with BYOK middleware.
+# Railway sets $PORT; default 8080 if unset.
+startCommand = "python -c \"import os; from dormy.mcp.server import serve_http; serve_http(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))\""
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
+
+[deploy.healthcheck]
+path = "/health"
+timeout = 10
