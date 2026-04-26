@@ -90,24 +90,46 @@ def build_extraction_prompt(input: ExtractionInput) -> str:
         else ""
     )
     return (
-        "You are extracting durable observations about a founder from their "
-        "recent conversation with the Dormy fundraising copilot.\n\n"
+        "You extract durable observations about a founder from their recent "
+        "conversation with Dormy, a fundraising copilot. These observations "
+        "feed back into future Dormy prompts to keep responses on-context, "
+        "so accuracy and concision matter more than coverage.\n\n"
         "Output ONLY a JSON array. Each element MUST have exactly these keys:\n"
         '- "kind": one of "preference", "fact", "goal", "concern", "pattern"\n'
-        '- "tags": array of 1-5 lowercase kebab-case strings (e.g. '
-        '["fundraising", "seed-stage", "eu-market"])\n'
+        '- "tags": array of 1-5 lowercase kebab-case strings '
+        '(e.g. ["fundraising", "seed-stage", "eu-market"])\n'
         f'- "content": single sentence ≤ {MAX_CONTENT_CHARS} chars stating the observation\n'
-        '- "confidence": float 0.0-1.0 (your certainty)\n'
+        '- "confidence": float 0.0-1.0 calibrated per the rubric below\n'
         '- "source_message_ids": array of message ids from the conversation '
         "that support this observation\n\n"
-        "Rules:\n"
-        "- Only extract observations directly supported by the conversation.\n"
-        '- Skip ephemeral comments ("I\'m tired today", "let me think").\n'
-        '- Direct, useful, dry voice. No hedging ("seems to", "may be").\n'
-        "- Mirror the founder's language (English or Chinese).\n"
-        "- If nothing durable to extract, output: []\n"
-        f"- Maximum {MAX_OBSERVATIONS_PER_BATCH} observations per batch.\n\n"
-        f"Recent conversation:\n{transcript}{prior_section}\n\n"
+        "## Confidence rubric (calibrate carefully — do NOT default to 1.0)\n"
+        "- 0.95-1.00: Founder stated this as a direct fact "
+        "(\"I'm raising $2M\", \"we have 3 design partners\").\n"
+        "- 0.75-0.94: Strong inference from a clear signal (founder explicitly "
+        "ranked option A above option B, or described their stage twice).\n"
+        "- 0.55-0.74: Reasonable inference with mild ambiguity (founder mentioned "
+        "an interest in passing, framed as hypothetical).\n"
+        "- 0.30-0.54: Weak / possibly transient signal — usually skip.\n"
+        "- < 0.30: Skip entirely.\n\n"
+        "Most observations land in 0.75-0.95. Only direct quoted facts hit 0.95+.\n\n"
+        "## Voice\n"
+        "- Direct, useful, dry. No hedging language like \"seems to\", \"appears\", "
+        "\"may be\". Either you observed it or you skip it.\n"
+        "- Mirror the founder's language. English for English, Chinese for Chinese, "
+        "code-switched for code-switched. Don't translate.\n"
+        "- Preserve founder's specific phrases when they matter (e.g. if they say "
+        "\"thesis-driven VC\", keep that exact phrase).\n"
+        "- NO em-dashes (— or --) in content. Use commas, colons, semicolons, "
+        "periods, or parentheses. Voice rule from Dormy's design system.\n\n"
+        "## Skip these\n"
+        "- Ephemeral comments (\"I'm tired today\", \"let me think\", "
+        "\"give me a second\").\n"
+        "- Pleasantries (\"thanks\", \"that helps\").\n"
+        "- Things Dormy itself said unless founder confirmed/objected.\n"
+        "- Restatements of prior observations already in this batch.\n\n"
+        f"Maximum {MAX_OBSERVATIONS_PER_BATCH} observations per batch. "
+        "If nothing durable, output: []\n\n"
+        f"## Recent conversation\n{transcript}{prior_section}\n\n"
         "JSON array only, no commentary:"
     )
 
