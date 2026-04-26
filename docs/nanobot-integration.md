@@ -149,19 +149,36 @@ self-hosted, we publish the `Mode A` config + let them run their own.
 | **Watcher cron via nanobot.cron** | ⏳ | when watcher tool moves off mock |
 | **Daily 03:00 batch via nanobot.cron** | ⏳ | optional — current MCP-tool-hook path covers fire-and-forget already |
 
-## Proof-of-concept smoke test (local, this session)
+## Proof-of-concept smoke test (verified 2026-04-26)
 
 Verified locally that adding Dormy MCP to `~/.nanobot/config.json` makes
-all 6 tools visible to nanobot's agent loop. See
-`docs/nanobot-config-example.json` for the exact entry to merge.
+all 6 tools visible to nanobot's agent loop. **Zero dormy-ai code change
+required** — wiring is purely the config block at
+`docs/nanobot-config-example.json`.
 
-```bash
-# Merge `mcp_servers.dormy` from the example into ~/.nanobot/config.json
-# Then list tools nanobot sees:
-uv run nanobot agent -m "/help" 2>&1 | grep -E "dormy_|mcp_dormy"
+Steps run:
+
+1. Patched `~/.nanobot/config.json` with the `tools.mcp_servers.dormy`
+   stdio entry (pointing at the local checkout).
+2. Asked nanobot agent: *"List every tool name available to you. Output
+   ONLY a comma-separated list of tool names, no commentary."*
+
+Output (18 tools — 12 nanobot builtins + 6 dormy):
+
+```
+exec, glob, grep, list_dir, message, notebook_edit, read_file, write_file,
+cron, spawn, web_fetch, web_search,
+mcp_dormy_dormy_draft_intro, mcp_dormy_dormy_find_investors,
+mcp_dormy_dormy_memory_recall, mcp_dormy_dormy_profile_set,
+mcp_dormy_dormy_scan_product, mcp_dormy_dormy_watch_vcs
 ```
 
-Expected output: 6 entries `dormy_profile_set`, `dormy_scan_product`, etc.
+Naming scheme: nanobot prefixes external MCP tools as
+`mcp_<server>_<tool>`. Dormy registered its tools without a `dormy_`
+prefix in the names (the prefix is in the `register-as` server name), so
+the final namespaced names end up double-`dormy_` — `mcp_dormy_dormy_*`.
+We can rename Dormy's tools to drop the `dormy_` prefix in a future
+cleanup pass; not blocking.
 
 ## Why this is one-night-doable as a starter
 
