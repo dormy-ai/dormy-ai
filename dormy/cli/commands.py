@@ -85,11 +85,46 @@ def topup(amount: int = 20) -> None:
 
 
 @app.command("mcp-serve")
-def mcp_serve() -> None:
-    """Run the Dormy MCP server over stdio (for local Claude Code / Cursor)."""
-    from dormy.mcp.server import main as mcp_main
+def mcp_serve(
+    transport: str = typer.Option(
+        "stdio",
+        "--transport",
+        "-t",
+        help="MCP transport: 'stdio' (local install) or 'http' (hosted endpoint).",
+    ),
+    host: str = typer.Option(
+        "0.0.0.0",
+        "--host",
+        help="Bind host for HTTP transport (ignored for stdio).",
+    ),
+    port: int = typer.Option(
+        8080,
+        "--port",
+        "-p",
+        help="Bind port for HTTP transport (ignored for stdio).",
+    ),
+) -> None:
+    """Run the Dormy MCP server.
 
-    mcp_main()
+    stdio (default) — for local Claude Code / Cursor MCP installs.
+    http            — for the public mcp.heydormy.ai endpoint, with BYOK
+                      middleware that reads `Authorization: Bearer <key>`.
+    """
+    if transport == "stdio":
+        from dormy.mcp.server import main as mcp_main
+
+        mcp_main()
+    elif transport == "http":
+        from dormy.mcp.server import serve_http
+
+        typer.echo(f"Dormy MCP server (HTTP transport) on http://{host}:{port}")
+        typer.echo(f"  /health   liveness probe")
+        typer.echo(f"  /mcp      MCP streamable-http endpoint")
+        typer.echo(f"  BYOK: Authorization: Bearer <openrouter_key>")
+        serve_http(host=host, port=port)
+    else:
+        typer.echo(f"Unknown transport '{transport}'. Use 'stdio' or 'http'.", err=True)
+        raise typer.Exit(code=2)
 
 
 # ---------------------------------------------------------------------------

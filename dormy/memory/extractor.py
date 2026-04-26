@@ -170,18 +170,15 @@ def _parse_observations(raw: str) -> list[NewObservation]:
 
 
 async def _call_sonnet(prompt: str) -> str:
-    """Call Sonnet 4.6 via OpenRouter, return raw text response."""
-    if not settings.openrouter_api_key:
-        raise RuntimeError(
-            "DORMY_OPENROUTER_API_KEY not set — required for extractor LLM calls"
-        )
-    # Lazy import so observations.py can be imported without openai installed paths
-    from openai import AsyncOpenAI
+    """Call Sonnet 4.6 via OpenRouter, return raw text response.
 
-    client = AsyncOpenAI(
-        api_key=settings.openrouter_api_key,
-        base_url="https://openrouter.ai/api/v1",
-    )
+    Uses BYOK key from MCP request when available (via ContextVar),
+    falls back to `settings.openrouter_api_key` for CLI batch jobs.
+    """
+    # Lazy import keeps observations.py importable on systems without openai
+    from dormy.llm.client import get_openrouter_client
+
+    client = get_openrouter_client()
     resp = await client.chat.completions.create(
         model=EXTRACTION_MODEL,
         max_tokens=EXTRACTION_MAX_TOKENS,
