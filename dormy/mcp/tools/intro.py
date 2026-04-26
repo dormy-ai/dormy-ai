@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from dormy.mcp.mocks import INNER_CIRCLE_CONTACTS
+from dormy.memory.hooks import from_mcp_call
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -46,7 +47,7 @@ def register(mcp: "FastMCP") -> None:
         contact = _CONTACT_INDEX.get(contact_id)
 
         if not contact:
-            return DraftIntroResult(
+            result = DraftIntroResult(
                 contact_id=contact_id,
                 contact_name="(unknown)",
                 subject="(no draft — unknown contact)",
@@ -55,6 +56,12 @@ def register(mcp: "FastMCP") -> None:
                 suggested_channel="n/a",
                 note="⚠️ MOCK: only the 5 dummy inner circle ids are valid. See dormy_find_investors results.",
             )
+            from_mcp_call(
+                "dormy_draft_intro",
+                {"contact_id": contact_id, "angle": angle},
+                result,
+            )
+            return result
 
         chosen_angle = angle or "recent portfolio"
         name_first = contact["name"].split()[0]
@@ -85,7 +92,7 @@ def register(mcp: "FastMCP") -> None:
         if contact.get("warm_intro_path"):
             rationale += f"Surface the warm intro path to shortcut trust."
 
-        return DraftIntroResult(
+        result = DraftIntroResult(
             contact_id=contact_id,
             contact_name=contact["name"],
             subject=subject,
@@ -94,3 +101,9 @@ def register(mcp: "FastMCP") -> None:
             suggested_channel=f"Email ({contact.get('email', 'n/a')})",
             note="⚠️ MOCK — Claude Sonnet 4.6 (text_output route) drafts land in Week 4.",
         )
+        from_mcp_call(
+            "dormy_draft_intro",
+            {"contact_id": contact_id, "angle": angle},
+            result,
+        )
+        return result

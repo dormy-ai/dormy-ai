@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from dormy.mcp.mocks import SCAN_TEMPLATE
+from dormy.memory.hooks import from_mcp_call
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -44,10 +45,12 @@ def register(mcp: "FastMCP") -> None:
         url: str = Field(description="URL of the product landing page, GitHub repo, or pitch page"),
     ) -> ScanResult:
         data = SCAN_TEMPLATE
-        return ScanResult(
+        result = ScanResult(
             product=ProductInfo(**data["product"]),
             market=MarketInfo(**data["market"]),
             differentiators=data["differentiators"],
             risks=data["risks"],
             note=f"⚠️ MOCK DATA (ignoring input URL: {url}). Real scanner lands Week 3.",
         )
+        from_mcp_call("dormy_scan_product", {"url": url}, result)
+        return result

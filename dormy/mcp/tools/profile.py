@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from dormy.memory.hooks import from_mcp_call
+
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
@@ -33,7 +35,7 @@ def register(mcp: "FastMCP") -> None:
             description="Pitch page URL, founder GitHub, or product landing page"
         ),
     ) -> ProfileResult:
-        return ProfileResult(
+        result = ProfileResult(
             profile_id="mock-profile-001",
             source_url=source_url,
             name="Dormy AI (mock profile)",
@@ -45,3 +47,5 @@ def register(mcp: "FastMCP") -> None:
             ),
             note="⚠️ MOCK DATA — real scraper (Playwright + Vision) lands Week 3.",
         )
+        from_mcp_call("dormy_profile_set", {"source_url": source_url}, result)
+        return result

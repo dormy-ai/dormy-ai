@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from dormy.memory.hooks import from_mcp_call
+
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
@@ -48,7 +50,7 @@ def register(mcp: "FastMCP") -> None:
         hours = 24 if cadence == "daily" else 168
         next_run = datetime.now(timezone.utc) + timedelta(hours=hours)
 
-        return WatcherResult(
+        result = WatcherResult(
             watcher_id=watcher_id,
             query=query,
             cadence=cadence,
@@ -61,3 +63,9 @@ def register(mcp: "FastMCP") -> None:
                 f"Configured channels: {channels}."
             ),
         )
+        from_mcp_call(
+            "dormy_watch_vcs",
+            {"query": query, "cadence": cadence, "channels": channels},
+            result,
+        )
+        return result
