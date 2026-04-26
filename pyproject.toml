@@ -46,7 +46,11 @@ dependencies = [
     "python-telegram-bot>=21.0",
     # Utilities
     "pyyaml>=6.0",
-    "dormy-fundingnews",
+    # NOTE: dormy-fundingnews is intentionally NOT a hard dependency. It's an
+    # editable-from-sibling-path dev convenience for the local monorepo workspace.
+    # In production (Railway), the import in mcp/tools/find.py is wrapped in
+    # try/except — when missing, external_active VCs fall back to mock data.
+    # Dev install: `uv pip install -e ../dormy-fundingnews` (after `uv sync`).
 ]
 
 [project.optional-dependencies]
@@ -77,6 +81,7 @@ asyncio_mode = "auto"
 line-length = 100
 target-version = "py312"
 
-[tool.uv.sources]
-# dormy-fundingnews lives as a sibling package under dormy_cli/, same pattern as dormy-ai/dormy-web.
-dormy-fundingnews = { path = "../dormy-fundingnews", editable = true }
+# NOTE: previously had [tool.uv.sources] for dormy-fundingnews pointing at
+# ../dormy-fundingnews. Removed because the path source breaks Railway builds
+# (the sibling package isn't in the build context). For local dev, use
+# `uv pip install -e ../dormy-fundingnews` after `uv sync`.
