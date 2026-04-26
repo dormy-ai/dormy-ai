@@ -118,13 +118,57 @@ def mcp_serve(
         from dormy.mcp.server import serve_http
 
         typer.echo(f"Dormy MCP server (HTTP transport) on http://{host}:{port}")
-        typer.echo(f"  /health   liveness probe")
-        typer.echo(f"  /mcp      MCP streamable-http endpoint")
-        typer.echo(f"  BYOK: Authorization: Bearer <openrouter_key>")
+        typer.echo("  /health   liveness probe")
+        typer.echo("  /mcp      MCP streamable-http endpoint")
+        typer.echo("  BYOK: Authorization: Bearer <openrouter_key>")
         serve_http(host=host, port=port)
     else:
         typer.echo(f"Unknown transport '{transport}'. Use 'stdio' or 'http'.", err=True)
         raise typer.Exit(code=2)
+
+
+# ---------------------------------------------------------------------------
+# Telegram bot — gated access via invite tokens
+# ---------------------------------------------------------------------------
+
+invite_app = typer.Typer(
+    help="Manage Telegram bot invite tokens (gated access).", no_args_is_help=True
+)
+app.add_typer(invite_app, name="invite")
+
+
+@invite_app.command("create")
+def invite_create(email: str = typer.Argument(..., help="Founder email to invite.")) -> None:
+    """Mint a one-time Telegram invite link for `<email>`.
+
+    Looks up (or creates) the users row, generates a random token (~30d
+    valid), and prints the deep link to send to the founder. Token is
+    consumed when they click the link — re-running creates a new token.
+    """
+    import asyncio
+
+    from dormy.telegram.invites import create_invite
+
+    async def _run() -> None:
+        token, url = await create_invite(email)
+        typer.echo(url)
+        typer.echo(f"\n  email:  {email}")
+        typer.echo(f"  token:  {token}")
+        typer.echo("  expires: 30 days")
+
+    asyncio.run(_run())
+
+
+@app.command("telegram-serve")
+def telegram_serve() -> None:
+    """Run the Dormy Telegram bot (long-polling).
+
+    Requires DORMY_TELEGRAM_BOT_TOKEN. Bot is gated by invite_codes —
+    only users who clicked an approved invite link can chat.
+    """
+    from dormy.telegram.bot import serve
+
+    serve()
 
 
 # ---------------------------------------------------------------------------

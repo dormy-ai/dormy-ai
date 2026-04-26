@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from dormy.auth import get_current_user_id
 from dormy.knowledge.retrieve import recall as knowledge_recall
 from dormy.mcp.mocks import KNOWLEDGE_CHUNKS
 from dormy.memory.hooks import from_mcp_call
@@ -73,8 +74,17 @@ def register(mcp: "FastMCP") -> None:
         ),
         n: int = Field(default=5, ge=1, le=20),
     ) -> RecallResult:
+        # Per-user retrieval: only return chunks owned by this user (or
+        # global chunks with user_id IS NULL). Without this, anyone hitting
+        # the MCP could read everyone's curated knowledge.
+        user_id = get_current_user_id()
         try:
-            hits, mode = await knowledge_recall(query=query, tags=tags, limit=n)
+            hits, mode = await knowledge_recall(
+                query=query,
+                tags=tags,
+                user_id=str(user_id) if user_id else None,
+                limit=n,
+            )
         except Exception as e:
             logger.warning(f"retrieve failed, fallback to mock: {e}")
             result = _build_from_mock(query, tags, n)
