@@ -16,6 +16,9 @@ htmlcov/
 # uv
 .uv/
 
+# Spike workspace (nanobot multi-tenant verification, can be deleted anytime)
+.spike/
+
 # IDE
 .vscode/
 .idea/

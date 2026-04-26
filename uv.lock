@@ -662,7 +662,7 @@ scraper = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.18.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
-    { name = "dormy-fundingnews", editable = "../../dormy-fundingnews" },
+    { name = "dormy-fundingnews", editable = "../dormy-fundingnews" },
     { name = "feedparser", specifier = ">=6.0.0" },
     { name = "httpx", specifier = ">=0.26.0" },
     { name = "langchain-text-splitters", specifier = ">=0.0.1" },
@@ -694,7 +694,7 @@ provides-extras = ["scraper", "dev"]
 [[package]]
 name = "dormy-fundingnews"
 version = "0.1.0"
-source = { editable = "../../dormy-fundingnews" }
+source = { editable = "../dormy-fundingnews" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },

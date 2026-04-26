@@ -73,4 +73,5 @@ line-length = 100
 target-version = "py312"
 
 [tool.uv.sources]
-dormy-fundingnews = { path = "../../dormy-fundingnews", editable = true }
+# dormy-fundingnews lives as a sibling package under dormy_cli/, same pattern as dormy-ai/dormy-web.
+dormy-fundingnews = { path = "../dormy-fundingnews", editable = true }
