@@ -49,9 +49,9 @@ mcp: FastMCP = FastMCP(
     name="dormy",
     instructions=(
         f"Dormy AI v{__version__} — Fundraising copilot for founders. "
-        "Call dormy_profile_set first with your pitch URL, then dormy_find_investors "
-        "for matches, dormy_draft_intro to compose outreach. dormy_watch_vcs sets "
-        "a proactive watcher. dormy_memory_recall queries the knowledge base. "
+        "Call profile_set first with your pitch URL, then find_investors "
+        "for matches, draft_intro to compose outreach. watch_vcs sets "
+        "a proactive watcher. memory_recall queries the knowledge base. "
         "[Week 2 Step 1: all tools return mock data — real backends land Week 3-4.]"
     ),
     transport_security=TransportSecuritySettings(

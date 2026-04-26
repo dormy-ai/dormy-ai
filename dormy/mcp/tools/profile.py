@@ -1,4 +1,4 @@
-"""dormy_profile_set — build a founder/product profile from a URL (mock)."""
+"""profile_set — build a founder/product profile from a URL (mock)."""
 
 from __future__ import annotations
 
@@ -26,11 +26,11 @@ def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         description=(
             "Set the active founder/product profile by scraping a pitch URL or GitHub repo. "
-            "Subsequent calls to dormy_find_investors / dormy_draft_intro use this profile "
+            "Subsequent calls to find_investors / draft_intro use this profile "
             "as implicit context. [Week 2 Step 1: returns mock — real scraping lands Week 3.]"
         ),
     )
-    def dormy_profile_set(
+    def profile_set(
         source_url: str = Field(
             description="Pitch page URL, founder GitHub, or product landing page"
         ),
@@ -47,5 +47,5 @@ def register(mcp: "FastMCP") -> None:
             ),
             note="⚠️ MOCK DATA — real scraper (Playwright + Vision) lands Week 3.",
         )
-        from_mcp_call("dormy_profile_set", {"source_url": source_url}, result)
+        from_mcp_call("profile_set", {"source_url": source_url}, result)
         return result

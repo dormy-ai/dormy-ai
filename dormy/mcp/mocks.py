@@ -137,7 +137,7 @@ EXTERNAL_ACTIVE_VCS: list[dict] = [
 ]
 
 
-# Template for `dormy_scan_product` mock return
+# Template for `scan_product` mock return
 SCAN_TEMPLATE: dict = {
     "product": {
         "name": "Dormy AI",
@@ -163,7 +163,7 @@ SCAN_TEMPLATE: dict = {
 }
 
 
-# Mock knowledge chunks for `dormy_memory_recall`
+# Mock knowledge chunks for `memory_recall`
 KNOWLEDGE_CHUNKS: list[dict] = [
     {
         "source": "fletch_pmm",

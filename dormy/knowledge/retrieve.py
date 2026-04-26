@@ -5,7 +5,7 @@ Retrieval modes:
 - LEXICAL   — ILIKE fallback when no key (or embedding fails). Splits the
               query into terms, matches any term in content or title.
 
-Both modes return the same shape so callers (MCP `dormy_memory_recall`) can
+Both modes return the same shape so callers (MCP `memory_recall`) can
 transparently use whichever is available.
 """
 

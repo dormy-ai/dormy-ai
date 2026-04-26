@@ -1,4 +1,4 @@
-"""dormy_scan_product — structured product profile from a URL (mock)."""
+"""scan_product — structured product profile from a URL (mock)."""
 
 from __future__ import annotations
 
@@ -37,11 +37,11 @@ def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         description=(
             "Scan a product URL and return a structured profile: product / market / "
-            "differentiators / risks. Useful as input to dormy_find_investors for "
+            "differentiators / risks. Useful as input to find_investors for "
             "sector matching. [Week 2 Step 1: returns mock — Playwright + vision lands Week 3.]"
         ),
     )
-    def dormy_scan_product(
+    def scan_product(
         url: str = Field(description="URL of the product landing page, GitHub repo, or pitch page"),
     ) -> ScanResult:
         data = SCAN_TEMPLATE
@@ -52,5 +52,5 @@ def register(mcp: "FastMCP") -> None:
             risks=data["risks"],
             note=f"⚠️ MOCK DATA (ignoring input URL: {url}). Real scanner lands Week 3.",
         )
-        from_mcp_call("dormy_scan_product", {"url": url}, result)
+        from_mcp_call("scan_product", {"url": url}, result)
         return result

@@ -8,8 +8,8 @@
 ## What we're integrating
 
 - **Dormy MCP server** (this repo, `dormy.mcp.server`): exposes 6 tools
-  (`dormy_profile_set`, `dormy_scan_product`, `dormy_find_investors`,
-  `dormy_draft_intro`, `dormy_watch_vcs`, `dormy_memory_recall`).
+  (`profile_set`, `scan_product`, `find_investors`,
+  `draft_intro`, `watch_vcs`, `memory_recall`).
 - **Nanobot** ([HKUDS/nanobot](https://github.com/HKUDS/nanobot)): agent
   runtime providing chat-channel multiplexing (Telegram / Discord / WeChat
   / Slack / etc.), session management, and tool dispatch.
@@ -90,7 +90,7 @@ Telegram channel against a developer's local Dormy code without deploying.
 ```
 
 Nanobot tool dispatch automatically prefixes Dormy tools as
-`mcp_dormy_dormy_profile_set`, `mcp_dormy_dormy_find_investors`, etc.
+`mcp_dormy_profile_set`, `mcp_dormy_find_investors`, etc.
 (Format: `mcp_<server>_<tool>`.)
 
 ### Mode B — production (HTTP, BYOK)
@@ -168,17 +168,16 @@ Output (18 tools — 12 nanobot builtins + 6 dormy):
 ```
 exec, glob, grep, list_dir, message, notebook_edit, read_file, write_file,
 cron, spawn, web_fetch, web_search,
-mcp_dormy_dormy_draft_intro, mcp_dormy_dormy_find_investors,
-mcp_dormy_dormy_memory_recall, mcp_dormy_dormy_profile_set,
-mcp_dormy_dormy_scan_product, mcp_dormy_dormy_watch_vcs
+mcp_dormy_draft_intro, mcp_dormy_find_investors,
+mcp_dormy_memory_recall, mcp_dormy_profile_set,
+mcp_dormy_scan_product, mcp_dormy_watch_vcs
 ```
 
 Naming scheme: nanobot prefixes external MCP tools as
-`mcp_<server>_<tool>`. Dormy registered its tools without a `dormy_`
-prefix in the names (the prefix is in the `register-as` server name), so
-the final namespaced names end up double-`dormy_` — `mcp_dormy_dormy_*`.
-We can rename Dormy's tools to drop the `dormy_` prefix in a future
-cleanup pass; not blocking.
+`mcp_<server>_<tool>`. Dormy's tool names are bare (`profile_set`,
+`scan_product`, `find_investors`, `draft_intro`, `watch_vcs`,
+`memory_recall`) — the namespace prefix lives in the server name
+`dormy`, so namespaced names land cleanly as `mcp_dormy_<tool>`.
 
 ## Why this is one-night-doable as a starter
 
