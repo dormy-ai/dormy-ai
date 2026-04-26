@@ -25,8 +25,12 @@ Long-polling — no public webhook required.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import threading
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from uuid import UUID, uuid4
 
 from loguru import logger
@@ -267,8 +271,47 @@ def build_application() -> Application:
     return app
 
 
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Tiny /health endpoint so Railway's healthcheck passes for the bot service."""
+
+    def do_GET(self) -> None:  # noqa: N802 — std lib API
+        if self.path == "/health":
+            payload = json.dumps({"ok": True, "service": "dormy-tg"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, *args, **kwargs) -> None:  # noqa: ARG002
+        # Silence per-request access logging — Railway healthcheck runs every
+        # ~10s and we don't need that noise in the bot logs.
+        pass
+
+
+def _start_health_server(port: int) -> None:
+    """Spin up a daemon-thread HTTP server for /health on the Railway-injected PORT.
+
+    Long-polling bot doesn't bind any port itself, so without this Railway's
+    healthcheck (configured in railway.toml at /health) fails the deploy."""
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    logger.info(f"dormy-tg: health server listening on 0.0.0.0:{port}")
+
+
 def serve() -> None:
     """Run the bot until Ctrl+C / SIGTERM."""
+    # Railway injects PORT for HTTP services; we use it for the /health probe.
+    port_env = os.environ.get("PORT")
+    if port_env:
+        try:
+            _start_health_server(int(port_env))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"dormy-tg: failed to start health server: {e}")
+
     app = build_application()
     logger.info("dormy-tg: bot starting (long-polling)")
     app.run_polling(stop_signals=None)  # let our process supervisor handle signals
