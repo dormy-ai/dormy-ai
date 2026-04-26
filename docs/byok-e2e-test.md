@@ -55,12 +55,12 @@ claude mcp list
 
 **期待:** Claude 会调用 `tools/list`（或者直接报告）6 个工具：
 
-- `dormy_profile_set`
-- `dormy_scan_product`
-- `dormy_find_investors`
-- `dormy_draft_intro`
-- `dormy_watch_vcs`
-- `dormy_memory_recall`
+- `profile_set`
+- `scan_product`
+- `find_investors`
+- `draft_intro`
+- `watch_vcs`
+- `memory_recall`
 
 如果 Claude 没主动列，自己看 `claude mcp list` 应该能看到工具数量。
 
@@ -72,7 +72,7 @@ claude mcp list
 
 > 用 dormy 帮我找 3 个最近活跃的 Series A consumer VC
 
-**期待:** Claude 调用 `dormy_find_investors`，返回 mock 数据（当前 server 端工具大部分还是 mock，Week 3-4 才接真实 backend）。返回 JSON 应该包含 3 个投资人对象（name / firm / focus 等字段）。
+**期待:** Claude 调用 `find_investors`，返回 mock 数据（当前 server 端工具大部分还是 mock，Week 3-4 才接真实 backend）。返回 JSON 应该包含 3 个投资人对象（name / firm / focus 等字段）。
 
 > 现在 mock 数据是预期的 —— 重点是验证 **BYOK header → server 接收 → tool 被调用 → 返回 → 显示给用户** 整条链路通了。
 

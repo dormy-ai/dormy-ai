@@ -1,4 +1,4 @@
-"""dormy_find_investors — Inner Circle × Active VC playbook.
+"""find_investors — Inner Circle × Active VC playbook.
 
 Three-tier return structure:
 
@@ -330,7 +330,7 @@ def register(mcp: "FastMCP") -> None:
             "external tier still uses mock until Week 3 startups.gallery integration."
         ),
     )
-    async def dormy_find_investors(
+    async def find_investors(
         sector: str | None = Field(
             default=None,
             description="e.g. 'ai-infra', 'fintech', 'consumer'",
@@ -353,7 +353,7 @@ def register(mcp: "FastMCP") -> None:
             result = await _build_from_mock(sector, stage, n)
 
         from_mcp_call(
-            "dormy_find_investors",
+            "find_investors",
             {"sector": sector, "stage": stage, "n": n},
             result,
         )

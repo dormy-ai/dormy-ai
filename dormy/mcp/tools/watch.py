@@ -1,4 +1,4 @@
-"""dormy_watch_vcs — register a proactive daily/weekly VC watcher (mock)."""
+"""watch_vcs — register a proactive daily/weekly VC watcher (mock)."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def register(mcp: "FastMCP") -> None:
             "[Week 2 Step 1: returns mock watcher_id — Railway cron + Resend/Telegram push lands Week 4.]"
         ),
     )
-    def dormy_watch_vcs(
+    def watch_vcs(
         query: str = Field(
             description="Natural-language query, e.g. 'AI infra seed rounds in last 7 days'"
         ),
@@ -64,7 +64,7 @@ def register(mcp: "FastMCP") -> None:
             ),
         )
         from_mcp_call(
-            "dormy_watch_vcs",
+            "watch_vcs",
             {"query": query, "cadence": cadence, "channels": channels},
             result,
         )

@@ -14,12 +14,12 @@ Dormy is an **agent-native** fundraising infrastructure for founders. It exposes
 
 ## Core tools
 
-- `dormy_profile_set` — build a founder/product profile from a URL
-- `dormy_scan_product` — structured product profile (market, differentiators, risks)
-- `dormy_find_investors` — Inner Circle ⭐ + Active VC + on-demand deep research
-- `dormy_draft_intro` — personalized outreach email
-- `dormy_watch_vcs` — daily VC match pushed via Email/Telegram
-- `dormy_memory_recall` — RAG retrieval from Dormy's knowledge base
+- `profile_set` — build a founder/product profile from a URL
+- `scan_product` — structured product profile (market, differentiators, risks)
+- `find_investors` — Inner Circle ⭐ + Active VC + on-demand deep research
+- `draft_intro` — personalized outreach email
+- `watch_vcs` — daily VC match pushed via Email/Telegram
+- `memory_recall` — RAG retrieval from Dormy's knowledge base
 
 ## Tier
 

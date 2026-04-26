@@ -1,4 +1,4 @@
-"""dormy_draft_intro — personalized outreach email (mock)."""
+"""draft_intro — personalized outreach email (mock)."""
 
 from __future__ import annotations
 
@@ -34,9 +34,9 @@ def register(mcp: "FastMCP") -> None:
             "reply rate. [Week 2 Step 1: returns mock — Claude Sonnet drafting lands Week 4.]"
         ),
     )
-    def dormy_draft_intro(
+    def draft_intro(
         contact_id: str = Field(
-            description="Contact id from dormy_find_investors (e.g. 'alex-chen')"
+            description="Contact id from find_investors (e.g. 'alex-chen')"
         ),
         angle: str | None = Field(
             default=None,
@@ -51,13 +51,13 @@ def register(mcp: "FastMCP") -> None:
                 contact_id=contact_id,
                 contact_name="(unknown)",
                 subject="(no draft — unknown contact)",
-                body="Contact not found in mock Inner Circle. Call dormy_find_investors first to discover contact ids.",
+                body="Contact not found in mock Inner Circle. Call find_investors first to discover contact ids.",
                 rationale="Invalid contact_id",
                 suggested_channel="n/a",
-                note="⚠️ MOCK: only the 5 dummy inner circle ids are valid. See dormy_find_investors results.",
+                note="⚠️ MOCK: only the 5 dummy inner circle ids are valid. See find_investors results.",
             )
             from_mcp_call(
-                "dormy_draft_intro",
+                "draft_intro",
                 {"contact_id": contact_id, "angle": angle},
                 result,
             )
@@ -102,7 +102,7 @@ def register(mcp: "FastMCP") -> None:
             note="⚠️ MOCK — Claude Sonnet 4.6 (text_output route) drafts land in Week 4.",
         )
         from_mcp_call(
-            "dormy_draft_intro",
+            "draft_intro",
             {"contact_id": contact_id, "angle": angle},
             result,
         )

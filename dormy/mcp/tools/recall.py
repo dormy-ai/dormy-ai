@@ -1,4 +1,4 @@
-"""dormy_memory_recall — RAG retrieval from Dormy's knowledge base.
+"""memory_recall — RAG retrieval from Dormy's knowledge base.
 
 Week 3: connected to Supabase `knowledge_chunks` via `dormy.knowledge.retrieve`.
 If DB is empty or unreachable, falls back to in-process mock constants so the
@@ -65,7 +65,7 @@ def register(mcp: "FastMCP") -> None:
             "falls back to lexical ILIKE search otherwise, then to mock."
         ),
     )
-    async def dormy_memory_recall(
+    async def memory_recall(
         query: str = Field(description="Natural-language query"),
         tags: list[str] | None = Field(
             default=None,
@@ -105,7 +105,7 @@ def register(mcp: "FastMCP") -> None:
                 )
 
         from_mcp_call(
-            "dormy_memory_recall",
+            "memory_recall",
             {"query": query, "tags": tags, "n": n},
             result,
         )
