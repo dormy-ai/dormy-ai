@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from dormy.knowledge.retrieve import recall as knowledge_recall
 from dormy.mcp.mocks import KNOWLEDGE_CHUNKS
+from dormy.memory.hooks import from_mcp_call
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -76,29 +77,36 @@ def register(mcp: "FastMCP") -> None:
             hits, mode = await knowledge_recall(query=query, tags=tags, limit=n)
         except Exception as e:
             logger.warning(f"retrieve failed, fallback to mock: {e}")
-            return _build_from_mock(query, tags, n)
-
-        if not hits:
-            return _build_from_mock(query, tags, n)
-
-        return RecallResult(
-            query=query,
-            chunks=[
-                KnowledgeChunkOut(
-                    source=h.source,
-                    source_path=h.source_path,
-                    title=h.title,
-                    excerpt=h.excerpt,
-                    score=h.score,
-                    tags=h.tags,
+            result = _build_from_mock(query, tags, n)
+        else:
+            if not hits:
+                result = _build_from_mock(query, tags, n)
+            else:
+                result = RecallResult(
+                    query=query,
+                    chunks=[
+                        KnowledgeChunkOut(
+                            source=h.source,
+                            source_path=h.source_path,
+                            title=h.title,
+                            excerpt=h.excerpt,
+                            score=h.score,
+                            tags=h.tags,
+                        )
+                        for h in hits
+                    ],
+                    count=len(hits),
+                    data_source=mode,
+                    note=(
+                        "semantic: OpenAI embeddings + pgvector cosine sim"
+                        if mode == "semantic"
+                        else "lexical: ILIKE fallback (add DORMY_OPENAI_API_KEY for semantic RAG)"
+                    ),
                 )
-                for h in hits
-            ],
-            count=len(hits),
-            data_source=mode,
-            note=(
-                "semantic: OpenAI embeddings + pgvector cosine sim"
-                if mode == "semantic"
-                else "lexical: ILIKE fallback (add DORMY_OPENAI_API_KEY for semantic RAG)"
-            ),
+
+        from_mcp_call(
+            "dormy_memory_recall",
+            {"query": query, "tags": tags, "n": n},
+            result,
         )
+        return result

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from dormy.config import settings
 from dormy.mcp.mocks import EXTERNAL_ACTIVE_VCS, INNER_CIRCLE_CONTACTS
+from dormy.memory.hooks import from_mcp_call
 
 # dormy-fundingnews is an editable sibling package that produces the Active VC feed.
 # Optional import — if unavailable, external_active falls back to mock.
@@ -342,12 +343,18 @@ def register(mcp: "FastMCP") -> None:
     ) -> FindInvestorsResult:
         try:
             rows = await _query_inner_contacts(sector, stage)
+            if not rows:
+                logger.info("contacts table returned 0 rows — falling back to mock")
+                result = await _build_from_mock(sector, stage, n)
+            else:
+                result = await _build_from_db(rows, sector, stage, n)
         except Exception as e:
             logger.warning(f"contacts query failed, falling back to mock: {e}")
-            return await _build_from_mock(sector, stage, n)
+            result = await _build_from_mock(sector, stage, n)
 
-        if not rows:
-            logger.info("contacts table returned 0 rows — falling back to mock")
-            return await _build_from_mock(sector, stage, n)
-
-        return await _build_from_db(rows, sector, stage, n)
+        from_mcp_call(
+            "dormy_find_investors",
+            {"sector": sector, "stage": stage, "n": n},
+            result,
+        )
+        return result
