@@ -19,11 +19,31 @@ Or via the convenience CLI:
 
 from __future__ import annotations
 
+import os
+
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from dormy import __version__
 from dormy.mcp.auth import BYOKMiddleware
 from dormy.mcp.tools import find, intro, profile, recall, scan, watch
+
+# DNS rebinding protection. Default list covers local dev + Railway temp
+# domain + the production custom domain. Override via env if you spin up
+# another deployment (comma-separated):
+#     DORMY_MCP_ALLOWED_HOSTS=mcp.heydormy.ai,foo.example.com
+_DEFAULT_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "mcp.heydormy.ai",
+    "dormy-ai-production.up.railway.app",
+]
+_env_hosts = os.environ.get("DORMY_MCP_ALLOWED_HOSTS")
+ALLOWED_HOSTS = (
+    [h.strip() for h in _env_hosts.split(",") if h.strip()]
+    if _env_hosts
+    else _DEFAULT_HOSTS
+)
 
 mcp: FastMCP = FastMCP(
     name="dormy",
@@ -33,6 +53,13 @@ mcp: FastMCP = FastMCP(
         "for matches, dormy_draft_intro to compose outreach. dormy_watch_vcs sets "
         "a proactive watcher. dormy_memory_recall queries the knowledge base. "
         "[Week 2 Step 1: all tools return mock data — real backends land Week 3-4.]"
+    ),
+    transport_security=TransportSecuritySettings(
+        # Reject hosts not in this list to prevent DNS rebinding attacks.
+        allowed_hosts=ALLOWED_HOSTS,
+        # Same list for browser CORS origins (with scheme).
+        allowed_origins=[f"https://{h}" for h in ALLOWED_HOSTS]
+        + [f"http://{h}" for h in ALLOWED_HOSTS],
     ),
 )
 
