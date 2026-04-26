@@ -82,6 +82,35 @@ def test_prompt_omits_prior_section_when_empty() -> None:
     assert "Prior observations" not in prompt
 
 
+def test_prompt_includes_confidence_rubric() -> None:
+    """Sonnet was returning 1.0 for everything — rubric anchors it."""
+    prompt = build_extraction_prompt(_make_input())
+    assert "Confidence rubric" in prompt
+    assert "do NOT default to 1.0" in prompt
+    # Anchor bands referenced
+    assert "0.95-1.00" in prompt
+    assert "0.55-0.74" in prompt
+
+
+def test_prompt_forbids_em_dashes() -> None:
+    """Voice rule from DESIGN.md: no em-dashes in content."""
+    prompt = build_extraction_prompt(_make_input())
+    assert "NO em-dashes" in prompt or "no em-dashes" in prompt.lower()
+
+
+def test_prompt_states_voice_rules() -> None:
+    """Direct, useful, dry — no hedging."""
+    prompt = build_extraction_prompt(_make_input())
+    assert "Direct, useful, dry" in prompt
+    assert "hedging" in prompt
+
+
+def test_prompt_says_mirror_founder_language() -> None:
+    prompt = build_extraction_prompt(_make_input())
+    assert "Mirror" in prompt
+    assert "Chinese" in prompt
+
+
 # ---------------------------- parser ----------------------------
 
 
