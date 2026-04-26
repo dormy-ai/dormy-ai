@@ -1,0 +1,57 @@
+{
+  "_comment": "Example nanobot config wiring Dormy MCP. Two modes shown — pick one for your ~/.nanobot/config.json. Existing keys (agents, channels, providers, gateway, api, etc.) live alongside; this file shows only what's new. See docs/nanobot-integration.md for full architecture.",
+
+  "tools": {
+    "mcp_servers": {
+      "_pick_one": "Mode A (stdio, local dev) OR Mode B (HTTP, production)",
+
+      "dormy_modeA_stdio": {
+        "_comment": "Nanobot spawns dormy-ai as a stdio subprocess. Use for local dev / testing nanobot+Telegram against your local code. Replace the path with your actual dormy-ai checkout location.",
+        "type": "stdio",
+        "command": "uv",
+        "args": [
+          "run", "--directory",
+          "/Users/bei/Documents/AI_Dev/dormy_cli/dormy-ai",
+          "python", "-m", "dormy.mcp.server"
+        ],
+        "env": {
+          "DORMY_DATABASE_URL": "${DORMY_DATABASE_URL}",
+          "DORMY_OPENAI_API_KEY": "${DORMY_OPENAI_API_KEY}",
+          "DORMY_OPENROUTER_API_KEY": "${DORMY_OPENROUTER_API_KEY}",
+          "DORMY_USER_ID": "${DORMY_USER_ID}"
+        },
+        "tool_timeout": 60
+      },
+
+      "dormy_modeB_http": {
+        "_comment": "Production: nanobot connects to deployed Dormy MCP at mcp.heydormy.ai over HTTPS. Authorization header carries the user's OpenRouter key (BYOK). For v0.1 'dormy_router' mode, the same shared key is used for every chat — see docs/nanobot-integration.md.",
+        "type": "streamableHttp",
+        "url": "https://mcp.heydormy.ai/mcp",
+        "headers": {
+          "Authorization": "Bearer ${USER_OPENROUTER_KEY}"
+        },
+        "tool_timeout": 60
+      }
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "_comment": "Disable nanobot's built-in Dream long-term memory — Dormy uses user_observations table (see PR #1). Otherwise Dream files (~/.nanobot/workspace/{SOUL,USER,MEMORY}.md) leak across founders in multi-tenant SaaS.",
+      "dream": {
+        "intervalH": 99999
+      },
+      "disabled_skills": ["memory"]
+    }
+  },
+
+  "channels": {
+    "telegram": {
+      "_comment": "Replace token after revoking the spike token (8696904581:AAH...). Production should register @HeyDormyBot or similar via BotFather, store the new token in Railway env. allowFrom: ['*'] = SaaS multi-user mode (per-user session isolation handled by nanobot's channel × chat_id keying).",
+      "enabled": true,
+      "token": "${TELEGRAM_BOT_TOKEN}",
+      "allowFrom": ["*"],
+      "streaming": true
+    }
+  }
+}
