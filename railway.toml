@@ -2,9 +2,12 @@
 builder = "nixpacks"
 
 [deploy]
-# Public hosted endpoint (mcp.heydormy.ai). HTTP transport with BYOK middleware.
+# Two services share this repo, differentiated by RAILWAY_SERVICE_NAME:
+#   - dormy-ai  → MCP server (HTTP transport, BYOK middleware) on mcp.heydormy.ai
+#   - dormy-tg  → Telegram bot (long-polling) — also exposes /health on $PORT
+#                 so the same healthcheck below works for both.
 # Railway sets $PORT; default 8080 if unset.
-startCommand = "python -c \"import os; from dormy.mcp.server import serve_http; serve_http(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))\""
+startCommand = "if [ \"$RAILWAY_SERVICE_NAME\" = \"dormy-tg\" ]; then python -m dormy.cli.commands telegram-serve; else python -c \"import os; from dormy.mcp.server import serve_http; serve_http(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))\"; fi"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
 
