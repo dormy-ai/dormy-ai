@@ -39,5 +39,10 @@ class DormySettings(BaseSettings):
     # Local Obsidian vault (for knowledge ingest)
     obsidian_vault_path: str | None = None
 
+    # User identity fallback for CLI / stdio mode (no BYOK request context).
+    # When set, dormy.auth.get_current_user_id() returns this UUID.
+    # Production HTTP requests resolve user_id from BYOK key hash instead.
+    user_id: str | None = None
+
 
 settings = DormySettings()
