@@ -257,5 +257,181 @@ def db_ping() -> None:
     asyncio.run(_run())
 
 
+# ---------------------------------------------------------------------------
+# Memory module — observations + extractor diagnostics
+# ---------------------------------------------------------------------------
+
+memory_app = typer.Typer(
+    help="Long-term memory diagnostics + manual extractor / retrieval tests."
+)
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("health")
+def memory_health() -> None:
+    """Show user_observations table stats (total / distinct users / latest)."""
+    import asyncio
+    import json
+
+    from dormy.db import close_pool
+    from dormy.memory.observations import health
+
+    async def _run() -> None:
+        try:
+            result = await health()
+        finally:
+            await close_pool()
+        typer.echo(json.dumps(result, indent=2, default=str))
+
+    asyncio.run(_run())
+
+
+@memory_app.command("test-extract")
+def memory_test_extract(
+    user_id: str = typer.Option(..., help="User UUID to attribute the batch to."),
+    messages_file: str = typer.Option(
+        ..., help="Path to a JSON file: list of {id, role, content, timestamp?}."
+    ),
+    source: str = typer.Option("cli", help="Observation source: telegram | cli | mcp."),
+    session_id: str = typer.Option("test-extract", help="Session id label."),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print parsed observations without inserting (no embed, no insert).",
+    ),
+) -> None:
+    """End-to-end extractor smoke test: messages → Sonnet 4.6 → embed → insert.
+
+    Example:
+        echo '[{"id":"m1","role":"user","content":"raising 2M seed"}]' > /tmp/m.json
+        dormy memory test-extract --user-id <uuid> --messages-file /tmp/m.json
+
+    Requires DORMY_OPENROUTER_API_KEY (Sonnet) + DORMY_OPENAI_API_KEY (embed).
+    """
+    import asyncio
+    import json as _json
+    from uuid import UUID
+
+    from dormy.db import close_pool
+    from dormy.memory.extractor import (
+        ConversationMessage,
+        ExtractionInput,
+        _call_sonnet,
+        _parse_observations,
+        build_extraction_prompt,
+        run_batch,
+    )
+
+    async def _run() -> None:
+        with open(messages_file) as f:
+            raw_msgs = _json.load(f)
+        messages = [
+            ConversationMessage(
+                id=m["id"],
+                role=m["role"],
+                content=m["content"],
+                timestamp=m.get("timestamp"),
+            )
+            for m in raw_msgs
+        ]
+        ei = ExtractionInput(
+            user_id=UUID(user_id),
+            source=source,  # type: ignore[arg-type]
+            session_id=session_id,
+            messages=messages,
+        )
+        try:
+            if dry_run:
+                prompt = build_extraction_prompt(ei)
+                typer.secho("--- PROMPT ---", fg=typer.colors.CYAN, bold=True)
+                typer.echo(prompt)
+                raw = await _call_sonnet(prompt)
+                typer.secho("--- RAW SONNET OUTPUT ---", fg=typer.colors.CYAN, bold=True)
+                typer.echo(raw)
+                obs = _parse_observations(raw)
+                typer.secho(
+                    f"--- PARSED ({len(obs)} observations) ---",
+                    fg=typer.colors.CYAN,
+                    bold=True,
+                )
+                for o in obs:
+                    typer.echo(f"  [{o.kind:12}] tags={o.tags} conf={o.confidence:.2f}")
+                    typer.echo(f"                {o.content}")
+                return
+
+            result = await run_batch(ei)
+            typer.secho(
+                f"✓ batch {result.batch_id}", fg=typer.colors.GREEN, bold=True
+            )
+            typer.echo(f"  inserted: {len(result.new_observations)} observations")
+            if result.error:
+                typer.secho(f"  error: {result.error}", fg=typer.colors.RED)
+            for o in result.new_observations:
+                typer.echo(f"    [{o.kind:12}] tags={o.tags} conf={o.confidence:.2f}")
+                typer.echo(f"                  {o.content}")
+        finally:
+            await close_pool()
+
+    asyncio.run(_run())
+
+
+@memory_app.command("retrieve")
+def memory_retrieve(
+    user_id: str = typer.Option(..., help="User UUID."),
+    query: str = typer.Option(
+        "", help="Optional natural-language query for semantic similarity."
+    ),
+    recent: int = typer.Option(10, help="Number of recent observations."),
+    similar: int = typer.Option(5, help="Top-k similar observations (if query given)."),
+    kind: str = typer.Option(
+        "", help="Filter by kind: preference|fact|goal|concern|pattern (comma-sep for multi)."
+    ),
+) -> None:
+    """Retrieve observations for a user; semantic-rank against an optional query."""
+    import asyncio
+    from uuid import UUID
+
+    from dormy.db import close_pool
+    from dormy.knowledge.embedder import embed_batch, have_embeddings
+    from dormy.memory.observations import retrieve_for_prompt
+
+    async def _run() -> None:
+        try:
+            query_emb: list[float] | None = None
+            if query and have_embeddings():
+                vecs = await embed_batch([query])
+                query_emb = vecs[0] if vecs else None
+
+            kinds_param = (
+                [k.strip() for k in kind.split(",") if k.strip()] if kind else None
+            )
+
+            obs_list = await retrieve_for_prompt(
+                user_id=UUID(user_id),
+                query_embedding=query_emb,
+                recent_k=recent,
+                similar_k=similar,
+                kinds=kinds_param,  # type: ignore[arg-type]
+            )
+
+            if not obs_list:
+                typer.echo("(no observations)")
+                return
+
+            typer.secho(
+                f"✓ {len(obs_list)} observations", fg=typer.colors.GREEN, bold=True
+            )
+            for o in obs_list:
+                typer.echo(
+                    f"  [{o.kind:12}] conf={o.confidence:.2f}  observed={o.observed_at}"
+                )
+                typer.echo(f"                tags={o.tags}")
+                typer.echo(f"                {o.content}")
+        finally:
+            await close_pool()
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()
