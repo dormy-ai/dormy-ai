@@ -27,16 +27,25 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import threading
+import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from loguru import logger
-from telegram import ReactionTypeEmoji, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReactionTypeEmoji,
+    Update,
+)
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -44,6 +53,7 @@ from telegram.ext import (
 )
 
 from dormy.config import settings
+from dormy.knowledge.retrieve import recall as knowledge_recall
 from dormy.llm.client import get_openrouter_client
 from dormy.mcp.auth import current_user_id
 from dormy.memory.extractor import (
@@ -74,7 +84,12 @@ CHAT_MODEL = "anthropic/claude-haiku-4-5"
 CHAT_MAX_TOKENS = 1024
 CHAT_TEMPERATURE = 0.7
 
-SYSTEM_PROMPT = """You are Dormy, a fundraising copilot for founders. You're helping the founder think about their raise — investors, intros, pitch positioning, GTM, hiring, and timing.
+SYSTEM_PROMPT = """You are Dormy, the AI copilot for super founders. Two domains, equal weight:
+
+- **Fundraising**: investors, intros, pitch positioning, deal timing.
+- **GTM**: ICP & positioning, copy & cold outreach, landing-page CRO, SEO/AI-SEO, pricing & launches.
+
+You have access to a curated 40-skill GTM playbook library (Cold Email, Page CRO, Customer Research, Pricing, Launch, etc. — adapted from coreyhaines31/marketingskills). When the founder's question maps to a playbook, ground your answer in that framework. Don't dump the playbook; apply it. Cite the playbook by name when you use one (e.g. "[Cold Email playbook]").
 
 Voice rules:
 - Direct, useful, dry. No hedging, no preamble, no "great question".
@@ -82,7 +97,169 @@ Voice rules:
 - One concrete next step beats three abstract options.
 - If you don't know, say so and ask the one specific question that would unblock you.
 
-You don't have live tool access in this chat yet (find_investors, draft_intro, etc. are coming). For now, focus on coaching and prep — concrete drafts, decision frames, market intel from your training data."""
+You don't have live tool access in this chat yet (find_investors, gtm_review_landing, etc. are coming). For now, focus on coaching and prep — concrete drafts, decision frames, market intel from your training data and from the playbook excerpts injected into your context."""
+
+# Lightweight router. Output structure must match exactly so the regex
+# parser in `_classify_topic` can extract values without a JSON parser.
+# Categories mirror the marketingskills sub-tags in the GTM RAG.
+ROUTER_MODEL = CHAT_MODEL  # same model — Haiku is cheap enough at ~$0.0001/turn
+ROUTER_PROMPT = """Classify the user's message for routing. Output EXACTLY 3 lines, no preamble:
+
+DOMAIN: one of [fundraising, gtm, both, neither]
+GTM_CATEGORY: if domain includes gtm, one of [icp, copy, cro, seo, distribution, growth, strategy, foundations]; else "none"
+SKILL: if there's a clear single playbook to suggest as a workflow, output its slug (e.g. "cold-email", "page-cro", "customer-research"); else "none"
+
+User message:
+{message}"""
+
+# Map skill slugs to display names (for inline button + system-prompt grounding)
+SKILL_LABELS = {
+    "customer-research": "Customer Research",
+    "competitor-profiling": "Competitor Profiling",
+    "competitor-alternatives": "Competitor Alternatives",
+    "product-marketing-context": "Product Marketing Context",
+    "copywriting": "Copywriting",
+    "copy-editing": "Copy Editing",
+    "cold-email": "Cold Email",
+    "email-sequence": "Email Sequence",
+    "ad-creative": "Ad Creative",
+    "page-cro": "Page CRO",
+    "form-cro": "Form CRO",
+    "popup-cro": "Popup CRO",
+    "onboarding-cro": "Onboarding CRO",
+    "signup-flow-cro": "Signup Flow CRO",
+    "paywall-upgrade-cro": "Paywall Upgrade CRO",
+    "seo-audit": "SEO Audit",
+    "ai-seo": "AI SEO",
+    "programmatic-seo": "Programmatic SEO",
+    "schema-markup": "Schema Markup",
+    "site-architecture": "Site Architecture",
+    "paid-ads": "Paid Ads",
+    "social-content": "Social Content",
+    "video": "Video",
+    "image": "Image",
+    "community-marketing": "Community Marketing",
+    "directory-submissions": "Directory Submissions",
+    "lead-magnets": "Lead Magnets",
+    "referral-program": "Referral Program",
+    "free-tool-strategy": "Free Tool Strategy",
+    "churn-prevention": "Churn Prevention",
+    "aso-audit": "ASO Audit",
+    "pricing-strategy": "Pricing Strategy",
+    "launch-strategy": "Launch Strategy",
+    "content-strategy": "Content Strategy",
+    "marketing-ideas": "Marketing Ideas",
+    "analytics-tracking": "Analytics Tracking",
+    "ab-test-setup": "A/B Test Setup",
+    "marketing-psychology": "Marketing Psychology",
+    "sales-enablement": "Sales Enablement",
+    "revops": "RevOps",
+}
+
+# Active skill workflow state — keyed by chat_id, value = (skill_slug, ts_unix).
+# Set on inline-button click; consumed on the user's NEXT message; auto-expires
+# after ACTIVE_SKILL_TTL seconds (in case user changes topic without /reset).
+_active_skill: dict[int, tuple[str, float]] = {}
+ACTIVE_SKILL_TTL = 300.0  # 5 min
+
+# Cache for full skill content (read from disk on first use, stays in memory)
+_SOURCES_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "dormy-skills"
+    / "sources"
+    / "marketingskills"
+    / "skills"
+)
+_skill_text_cache: dict[str, str] = {}
+
+
+def _load_skill_full_text(slug: str) -> str:
+    """Read the full SKILL.md body for `slug` from the vendored sources.
+
+    Returns "" if not found — caller can fall back to RAG excerpts."""
+    if slug in _skill_text_cache:
+        return _skill_text_cache[slug]
+    skill_md = _SOURCES_DIR / slug / "SKILL.md"
+    if not skill_md.is_file():
+        _skill_text_cache[slug] = ""
+        return ""
+    try:
+        text = skill_md.read_text()
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                text = parts[2].lstrip("\n")
+        _skill_text_cache[slug] = text
+        return text
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"failed to read skill {slug}: {e}")
+        _skill_text_cache[slug] = ""
+        return ""
+
+
+_ROUTER_LINE_RE = re.compile(r"^(DOMAIN|GTM_CATEGORY|SKILL):\s*(.+)$", re.MULTILINE)
+
+
+async def _classify_topic(message: str) -> dict[str, str]:
+    """Run the router LLM. Returns {'domain', 'gtm_category', 'skill'}.
+
+    Defaults to neither/none on parse failure — bot just replies normally."""
+    try:
+        client = get_openrouter_client()
+        resp = await client.chat.completions.create(
+            model=ROUTER_MODEL,
+            messages=[
+                {"role": "user", "content": ROUTER_PROMPT.format(message=message)}
+            ],
+            max_tokens=80,
+            temperature=0.0,
+        )
+        output = (resp.choices[0].message.content or "").strip()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"router classifier failed: {e}")
+        return {"domain": "neither", "gtm_category": "none", "skill": "none"}
+
+    parsed: dict[str, str] = {
+        "domain": "neither",
+        "gtm_category": "none",
+        "skill": "none",
+    }
+    for m in _ROUTER_LINE_RE.finditer(output):
+        key = m.group(1).lower()
+        val = m.group(2).strip().strip("[]\"'").lower()
+        if key == "gtm_category":
+            parsed["gtm_category"] = val
+        elif key == "skill":
+            parsed["skill"] = val
+        elif key == "domain":
+            parsed["domain"] = val
+    return parsed
+
+
+async def _gtm_rag_context(query: str, sub_tag: str, limit: int = 4) -> str:
+    """Pull GTM playbook excerpts for system-prompt injection. Returns "" on
+    miss or error so callers can simply concatenate."""
+    if sub_tag in {"none", ""}:
+        return ""
+    try:
+        hits, _mode = await knowledge_recall(
+            query=query,
+            tags=["gtm", sub_tag],
+            limit=limit,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"gtm RAG recall failed: {e}")
+        return ""
+    if not hits:
+        return ""
+    blocks = []
+    for h in hits:
+        label = h.title or "playbook"
+        blocks.append(f"### {label}\n{h.excerpt}")
+    return (
+        "\n\n## Relevant GTM playbook excerpts (apply, don't dump)\n\n"
+        + "\n\n".join(blocks)
+    )
 
 
 async def _start_handler(
@@ -146,13 +323,17 @@ async def _reset_handler(
 
 
 async def _llm_reply(
-    chat_id: int, user_text: str, message_id: str
+    chat_id: int,
+    user_text: str,
+    message_id: str,
+    extra_system: str = "",
 ) -> str:
-    """Call OpenRouter with system prompt + recent transcript + this user message."""
+    """Call OpenRouter with system prompt (+ optional injected context) + transcript."""
     history = _history[chat_id]
     history.append(("user", user_text, message_id))
 
-    messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_full = SYSTEM_PROMPT + extra_system
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_full}]
     for role, content, _ in history:
         messages.append({"role": role, "content": content})
 
@@ -270,15 +451,69 @@ async def _message_handler(
     token = current_user_id.set(user.id)
     try:
         message_id = f"tg-{msg.message_id}-{uuid4().hex[:6]}"
+
+        # If user is mid-skill workflow (clicked an inline button recently),
+        # inject the full skill markdown as extra system context. One-shot:
+        # consume the active state after this turn so subsequent unrelated
+        # messages don't keep dragging the framework along.
+        active_skill_text = ""
+        suggested_skill: str | None = None
+        active = _active_skill.get(chat_id)
+        if active and (time.time() - active[1]) <= ACTIVE_SKILL_TTL:
+            slug = active[0]
+            full = _load_skill_full_text(slug)
+            if full:
+                active_skill_text = (
+                    f"\n\n## Active workflow: {SKILL_LABELS.get(slug, slug)}\n\n"
+                    "The user has explicitly invoked this playbook. Apply its\n"
+                    "framework end-to-end on whatever they wrote next. After\n"
+                    "delivering output, ask if they want a follow-up draft or\n"
+                    "to switch topics.\n\n"
+                    f"### Playbook source ({slug})\n\n{full}"
+                )
+                _active_skill.pop(chat_id, None)  # consume
+
+        # Otherwise, route the message to inject lighter RAG context (if GTM)
+        # and decide whether to suggest a deeper workflow via inline button.
+        rag_text = ""
+        if not active_skill_text:
+            classification = await _classify_topic(msg.text)
+            sub = classification["gtm_category"]
+            if sub != "none":
+                rag_text = await _gtm_rag_context(msg.text, sub)
+            skill_slug = classification["skill"]
+            if skill_slug != "none" and skill_slug in SKILL_LABELS:
+                suggested_skill = skill_slug
+
         try:
-            reply = await _llm_reply(chat_id, msg.text, message_id)
+            reply = await _llm_reply(
+                chat_id,
+                msg.text,
+                message_id,
+                extra_system=active_skill_text or rag_text,
+            )
         except Exception as e:  # noqa: BLE001
             logger.error(f"telegram-bot LLM call failed for user {user.id}: {e}")
             await msg.reply_text(
                 "Hmm, I hit an error reaching my brain. Try again in a moment?"
             )
             return
-        await msg.reply_text(reply)
+
+        # Send reply, optionally with an inline button for deeper workflow.
+        reply_kwargs: dict = {}
+        if suggested_skill:
+            label = SKILL_LABELS[suggested_skill]
+            reply_kwargs["reply_markup"] = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            text=f"📋 Apply [{label}] playbook",
+                            callback_data=f"skill:{suggested_skill}",
+                        )
+                    ]
+                ]
+            )
+        await msg.reply_text(reply, **reply_kwargs)
         _maybe_fire_extractor(user.id, chat_id)
     finally:
         stop_typing.set()
@@ -287,6 +522,51 @@ async def _message_handler(
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             typing_task.cancel()
         current_user_id.reset(token)
+
+
+async def _skill_callback_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle inline button taps with `callback_data='skill:<slug>'`.
+
+    Sets the chat's active_skill state so the user's NEXT text message
+    triggers a full-playbook reply. Acks the callback (Telegram requires)
+    and sends a brief confirmation prompt asking for the inputs the
+    skill needs."""
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    await query.answer()  # required by Telegram, dismisses loading spinner
+
+    if not query.data.startswith("skill:"):
+        return
+    slug = query.data.split(":", 1)[1]
+    if slug not in SKILL_LABELS:
+        return
+    chat = update.effective_chat
+    if chat is None:
+        return
+    chat_id = chat.id
+
+    # Verify user is bound (re-checks gate even though they got this far)
+    user = await user_by_telegram_chat_id(chat_id)
+    if user is None:
+        return
+
+    _active_skill[chat_id] = (slug, time.time())
+    label = SKILL_LABELS[slug]
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"OK — applying the [{label}] playbook to your next message.\n\n"
+            "Tell me what you're working with (the recipient / the page / "
+            "the audience / the angle — whatever specifics fit). I'll draft "
+            "or review using the framework end-to-end.\n\n"
+            "_(One-shot — your next reply triggers the full workflow. "
+            "Type /reset to cancel.)_"
+        ),
+        parse_mode="Markdown",
+    )
 
 
 def build_application() -> Application:
@@ -302,6 +582,7 @@ def build_application() -> Application:
     )
     app.add_handler(CommandHandler("start", _start_handler))
     app.add_handler(CommandHandler("reset", _reset_handler))
+    app.add_handler(CallbackQueryHandler(_skill_callback_handler, pattern=r"^skill:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, _message_handler)
     )

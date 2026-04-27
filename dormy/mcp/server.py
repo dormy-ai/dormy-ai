@@ -1,4 +1,4 @@
-"""Dormy MCP Server — exposes 6 tools to any MCP client.
+"""Dormy MCP Server — exposes 8 tools to any MCP client.
 
 Two transports:
   - stdio (default): for local Claude Code / Cursor installs.
@@ -26,7 +26,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from dormy import __version__
 from dormy.mcp.auth import BYOKMiddleware
-from dormy.mcp.tools import find, intro, profile, recall, scan, watch
+from dormy.mcp.tools import find, gtm, intro, profile, recall, scan, watch
 
 # DNS rebinding protection. Default list covers local dev + Railway temp
 # domain + the production custom domain. Override via env if you spin up
@@ -48,11 +48,15 @@ ALLOWED_HOSTS = (
 mcp: FastMCP = FastMCP(
     name="dormy",
     instructions=(
-        f"Dormy AI v{__version__} — Fundraising copilot for founders. "
-        "Call profile_set first with your pitch URL, then find_investors "
-        "for matches, draft_intro to compose outreach. watch_vcs sets "
-        "a proactive watcher. memory_recall queries the knowledge base. "
-        "[Week 2 Step 1: all tools return mock data — real backends land Week 3-4.]"
+        f"Dormy AI v{__version__} — copilot for super founders, covering "
+        "fundraising AND GTM. "
+        "Fundraising: call profile_set first with your pitch URL, then "
+        "find_investors for matches, draft_intro to compose outreach. "
+        "watch_vcs sets a proactive watcher. memory_recall queries the "
+        "knowledge base (Fundraising + GTM playbooks). "
+        "GTM: gtm_review_landing audits a landing page (CRO/copy/SEO); "
+        "gtm_draft_outreach drafts cold messages in 3 lengths. Both pull "
+        "from a curated 40-skill GTM playbook corpus."
     ),
     transport_security=TransportSecuritySettings(
         # Reject hosts not in this list to prevent DNS rebinding attacks.
@@ -70,6 +74,7 @@ find.register(mcp)
 intro.register(mcp)
 watch.register(mcp)
 recall.register(mcp)
+gtm.register(mcp)
 
 
 def http_app():
