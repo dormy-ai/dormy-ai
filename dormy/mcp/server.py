@@ -27,6 +27,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from dormy import __version__
 from dormy.mcp.auth import BYOKMiddleware
 from dormy.mcp.tools import (
+    deep_research,
     find,
     gtm,
     intro,
@@ -69,7 +70,9 @@ mcp: FastMCP = FastMCP(
         "from a curated 40-skill GTM playbook corpus. "
         "web_search runs real-time Tavily search for fresh signals "
         "(VC moves, recent rounds, founder takes). recent_funding queries "
-        "the curated funding-news DB for rounds in a sector/stage window."
+        "the curated funding-news DB for rounds in a sector/stage window. "
+        "deep_research runs MiroThinker for multi-step research questions "
+        "(slow, expensive — only when web_search isn't enough)."
     ),
     transport_security=TransportSecuritySettings(
         # Reject hosts not in this list to prevent DNS rebinding attacks.
@@ -90,6 +93,7 @@ recall.register(mcp)
 gtm.register(mcp)
 web_search.register(mcp)
 recent_funding.register(mcp)
+deep_research.register(mcp)
 
 
 def http_app():
