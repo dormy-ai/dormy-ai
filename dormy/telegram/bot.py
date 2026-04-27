@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from uuid import UUID, uuid4
 
 from loguru import logger
-from telegram import Update
+from telegram import ReactionTypeEmoji, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -212,6 +212,23 @@ async def _run_extractor_safely(extraction_input: ExtractionInput) -> None:
         logger.warning(f"telegram-bot extractor batch failed: {e}")
 
 
+async def _typing_pulse(bot, chat_id: int, stop: asyncio.Event) -> None:
+    """Re-send 'typing' chat action every 4s until stop is set.
+
+    Telegram's typing indicator auto-expires after ~5s, so for long-running
+    LLM calls we need to keep nudging it. Stops cleanly when the caller
+    sets `stop` (in finally block)."""
+    while not stop.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"typing pulse send_chat_action failed: {e}")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=4.0)
+        except asyncio.TimeoutError:
+            continue
+
+
 async def _message_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -231,12 +248,27 @@ async def _message_handler(
         )
         return
 
+    # 👀 emoji reaction on the user's message — instant "I see you" feedback
+    # even if the LLM call takes a few seconds. Continuous typing pulse below
+    # keeps the "is typing…" indicator alive for the duration of generation.
+    try:
+        await context.bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            reaction=[ReactionTypeEmoji(emoji="👀")],
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"set_message_reaction failed (non-fatal): {e}")
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(
+        _typing_pulse(context.bot, chat_id, stop_typing)
+    )
+
     # Bind user_id to this turn so any downstream code (extractor, future
     # MCP tool calls) can attribute writes.
     token = current_user_id.set(user.id)
     try:
-        # Show typing indicator while we generate
-        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         message_id = f"tg-{msg.message_id}-{uuid4().hex[:6]}"
         try:
             reply = await _llm_reply(chat_id, msg.text, message_id)
@@ -249,6 +281,11 @@ async def _message_handler(
         await msg.reply_text(reply)
         _maybe_fire_extractor(user.id, chat_id)
     finally:
+        stop_typing.set()
+        try:
+            await asyncio.wait_for(typing_task, timeout=2.0)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            typing_task.cancel()
         current_user_id.reset(token)
 
 
