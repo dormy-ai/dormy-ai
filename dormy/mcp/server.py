@@ -26,7 +26,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from dormy import __version__
 from dormy.mcp.auth import BYOKMiddleware
-from dormy.mcp.tools import find, gtm, intro, profile, recall, scan, watch
+from dormy.mcp.tools import find, gtm, intro, profile, recall, scan, watch, web_search
 
 # DNS rebinding protection. Default list covers local dev + Railway temp
 # domain + the production custom domain. Override via env if you spin up
@@ -56,7 +56,9 @@ mcp: FastMCP = FastMCP(
         "knowledge base (Fundraising + GTM playbooks). "
         "GTM: gtm_review_landing audits a landing page (CRO/copy/SEO); "
         "gtm_draft_outreach drafts cold messages in 3 lengths. Both pull "
-        "from a curated 40-skill GTM playbook corpus."
+        "from a curated 40-skill GTM playbook corpus. "
+        "web_search runs real-time Tavily search for fresh signals "
+        "(VC moves, recent rounds, founder takes)."
     ),
     transport_security=TransportSecuritySettings(
         # Reject hosts not in this list to prevent DNS rebinding attacks.
@@ -75,6 +77,7 @@ intro.register(mcp)
 watch.register(mcp)
 recall.register(mcp)
 gtm.register(mcp)
+web_search.register(mcp)
 
 
 def http_app():
