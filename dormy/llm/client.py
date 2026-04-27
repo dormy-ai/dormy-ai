@@ -30,7 +30,10 @@ def get_openrouter_client() -> AsyncOpenAI:
 
     Raises RuntimeError if neither is available.
     """
-    key = current_user_key.get() or settings.openrouter_api_key
+    raw_key = current_user_key.get() or settings.openrouter_api_key
+    # Defensive strip — keys pasted into Railway / dashboard often pick up
+    # trailing whitespace, which httpx rejects with "Illegal header value".
+    key = raw_key.strip() if raw_key else None
     if not key:
         raise RuntimeError(
             "No OpenRouter API key available. Either pass "
