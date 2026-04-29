@@ -20,6 +20,8 @@ from loguru import logger
 
 from dormy.mcp.tools.recent_funding import run_recent_funding
 from dormy.mcp.tools.web_search import run_web_search
+from dormy.skills.registry import VALID_CATEGORIES, registry
+from dormy.skills.runner import run_skill
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -108,6 +110,83 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": (
+                "List Dormy's curated playbook library (42 skills covering "
+                "GTM + fundraising). Each skill is a markdown framework "
+                "(cold-email, page-cro, pricing-strategy, customer-research, "
+                "etc.) the LLM can run via run_skill. Call this first to "
+                "discover relevant skills before run_skill. Filter by "
+                "category to narrow the list."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": VALID_CATEGORIES,
+                        "description": (
+                            "Optional filter. icp = customer/ICP research; "
+                            "copy = cold email + copywriting; cro = "
+                            "conversion / landing-page optimization; seo; "
+                            "distribution = paid + social + community; "
+                            "growth = lead gen + retention; strategy = "
+                            "pricing + launch + content; foundations = "
+                            "analytics + AB testing; fundraising = VC research."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_skill",
+            "description": (
+                "Execute one Dormy skill. Loads the skill's markdown "
+                "framework as system prompt and runs a single LLM "
+                "completion. Use after list_skills to pick a name. "
+                "Pass a paragraph of context as `input` — the user's "
+                "specific situation, target, constraints, voice — not "
+                "a 1-line query. Returns markdown."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Skill slug from list_skills, e.g. "
+                            "'gtm-cold-email', 'gtm-page-cro', "
+                            "'gtm-pricing-strategy'."
+                        ),
+                    },
+                    "input": {
+                        "type": "string",
+                        "description": (
+                            "Full paragraph of context: situation + target "
+                            "+ constraints + voice notes. Quality of input "
+                            "drives quality of output."
+                        ),
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "Optional override, e.g. "
+                            "'anthropic/claude-sonnet-4-6' for complex "
+                            "critique. Default: claude-haiku-4-5."
+                        ),
+                    },
+                },
+                "required": ["name", "input"],
+            },
+        },
+    },
 ]
 
 
@@ -132,6 +211,33 @@ async def execute_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 stage=args.get("stage"),
                 days=int(args.get("days", 30)),
                 n=int(args.get("n", 10)),
+            )
+            return result.model_dump()
+        if name == "list_skills":
+            category = args.get("category")
+            entries = (
+                registry.list_by_category(category)
+                if category
+                else registry.list_all()
+            )
+            return {
+                "category": category,
+                "count": len(entries),
+                "skills": [
+                    {
+                        "name": e.name,
+                        "category": e.category,
+                        "description": e.description,
+                    }
+                    for e in entries
+                ],
+                "available_categories": VALID_CATEGORIES,
+            }
+        if name == "run_skill":
+            result = await run_skill(
+                name=str(args.get("name", "")),
+                input=str(args.get("input", "")),
+                model=args.get("model"),
             )
             return result.model_dump()
     except Exception as e:
