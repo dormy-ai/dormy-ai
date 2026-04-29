@@ -8,6 +8,10 @@ who led. Sourced from dormy-fundingnews ETL pipeline (TechCrunch +
 Why MCP and not skill: the data is server-side (Supabase), shared
 across Claude Code + Telegram bot + future dashboard, and re-ingested
 on a daily cron. None of that is reproducible client-side.
+
+The `run_recent_funding()` async function is the single source of truth
+for the query logic — both the MCP tool wrapper below AND
+`dormy.telegram.tools` call it directly. Same pattern as web_search.
 """
 
 from __future__ import annotations
@@ -75,6 +79,78 @@ def _empty_result(
     )
 
 
+async def run_recent_funding(
+    sector: str | None = None,
+    stage: str | None = None,
+    days: int = 30,
+    n: int = 10,
+) -> RecentFundingResult:
+    """Query Supabase for recent funding events.
+
+    Pure executor — no MCP / observation hooks. Caller decides whether
+    to fire side-effects.
+    """
+    if _fundingnews_get_recent is None:
+        return _empty_result(
+            sector,
+            stage,
+            days,
+            "dormy-fundingnews not available — install editable dep.",
+            data_source="unavailable",
+        )
+
+    try:
+        rows = await _fundingnews_get_recent(
+            sector=sector,
+            stage=stage,
+            days=days,
+            limit=n,
+        )
+    except Exception as e:
+        logger.warning(f"recent_funding query failed: {e}")
+        return _empty_result(
+            sector, stage, days, f"query failed: {e}", data_source="unavailable"
+        )
+
+    events = [
+        FundingEventOut(
+            company_name=r.get("company_name", ""),
+            company_url=r.get("company_url"),
+            country=r.get("country"),
+            sector=r.get("sector"),
+            sub_sector=r.get("sub_sector"),
+            round_type=r.get("round_type"),
+            amount_usd=r.get("amount_usd"),
+            valuation_usd=r.get("valuation_usd"),
+            lead_investors=r.get("lead_investors", []) or [],
+            other_investors=r.get("other_investors", []) or [],
+            event_date=r.get("event_date", ""),
+            source_url=r.get("source_url"),
+            is_verified=bool(r.get("is_verified", False)),
+        )
+        for r in rows
+    ]
+    note_bits = []
+    if sector:
+        note_bits.append(f"sector~{sector}")
+    if stage:
+        note_bits.append(f"stage={stage}")
+    note_bits.append(f"days={days}")
+    return RecentFundingResult(
+        sector=sector,
+        stage=stage,
+        days=days,
+        events=events,
+        count=len(events),
+        data_source="db" if events else "empty",
+        note=(
+            f"{len(events)} events ({', '.join(note_bits)})"
+            if events
+            else f"No events ({', '.join(note_bits)}). Try widening days or removing filters."
+        ),
+    )
+
+
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         description=(
@@ -103,72 +179,9 @@ def register(mcp: "FastMCP") -> None:
         ),
         n: int = Field(default=10, ge=1, le=50, description="Max events"),
     ) -> RecentFundingResult:
-        if _fundingnews_get_recent is None:
-            result = _empty_result(
-                sector,
-                stage,
-                days,
-                "dormy-fundingnews not available — install editable dep.",
-                data_source="unavailable",
-            )
-            from_mcp_call(
-                "recent_funding",
-                {"sector": sector, "stage": stage, "days": days, "n": n},
-                result,
-            )
-            return result
-
-        try:
-            rows = await _fundingnews_get_recent(
-                sector=sector,
-                stage=stage,
-                days=days,
-                limit=n,
-            )
-        except Exception as e:
-            logger.warning(f"recent_funding query failed: {e}")
-            result = _empty_result(
-                sector, stage, days, f"query failed: {e}", data_source="unavailable"
-            )
-        else:
-            events = [
-                FundingEventOut(
-                    company_name=r.get("company_name", ""),
-                    company_url=r.get("company_url"),
-                    country=r.get("country"),
-                    sector=r.get("sector"),
-                    sub_sector=r.get("sub_sector"),
-                    round_type=r.get("round_type"),
-                    amount_usd=r.get("amount_usd"),
-                    valuation_usd=r.get("valuation_usd"),
-                    lead_investors=r.get("lead_investors", []) or [],
-                    other_investors=r.get("other_investors", []) or [],
-                    event_date=r.get("event_date", ""),
-                    source_url=r.get("source_url"),
-                    is_verified=bool(r.get("is_verified", False)),
-                )
-                for r in rows
-            ]
-            note_bits = []
-            if sector:
-                note_bits.append(f"sector~{sector}")
-            if stage:
-                note_bits.append(f"stage={stage}")
-            note_bits.append(f"days={days}")
-            result = RecentFundingResult(
-                sector=sector,
-                stage=stage,
-                days=days,
-                events=events,
-                count=len(events),
-                data_source="db" if events else "empty",
-                note=(
-                    f"{len(events)} events ({', '.join(note_bits)})"
-                    if events
-                    else f"No events ({', '.join(note_bits)}). Try widening days or removing filters."
-                ),
-            )
-
+        result = await run_recent_funding(
+            sector=sector, stage=stage, days=days, n=n
+        )
         from_mcp_call(
             "recent_funding",
             {"sector": sector, "stage": stage, "days": days, "n": n},

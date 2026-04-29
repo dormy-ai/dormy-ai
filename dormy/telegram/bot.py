@@ -66,6 +66,7 @@ from dormy.telegram.invites import (
     consume_invite,
     user_by_telegram_chat_id,
 )
+from dormy.telegram.tools import TOOL_SCHEMAS, execute_tool
 
 # In-memory transcript per chat. Keyed by chat_id, value is bounded deque
 # of (role, content, message_id) tuples. Cleared on /reset, kept across
@@ -97,7 +98,15 @@ Voice rules:
 - One concrete next step beats three abstract options.
 - If you don't know, say so and ask the one specific question that would unblock you.
 
-You don't have live tool access in this chat yet (find_investors, gtm_review_landing, etc. are coming). For now, focus on coaching and prep — concrete drafts, decision frames, market intel from your training data and from the playbook excerpts injected into your context."""
+You have these live tools — use them when the question calls for current data:
+
+- web_search(query, n=5): real-time Tavily search. Use when the user asks about a specific company / website / person they referenced (e.g. "what does sekureclaw.ai do?") or wants fresh news / signals. Don't claim you can't access the web — you can.
+
+- recent_funding(sector?, stage?, days=30): curated funding-rounds database (TechCrunch + 36kr + Pandaily + startups.gallery, refreshed daily). Use when user wants real funding data — "who just raised in AI infra", "AI infra deals last 30 days" — instead of your training-data guesses.
+
+Default to using a tool when the question is about specific companies, recent events, or anything time-sensitive. Two tools max per turn — don't chain unnecessarily. After a tool returns, synthesize the result into a useful answer in the founder's language; don't just dump JSON.
+
+For everything else (pitch reviews, coaching, GTM frames, intro drafts), keep doing what you do — concrete drafts, decision frames, playbook excerpts."""
 
 # Lightweight router. Output structure must match exactly so the regex
 # parser in `_classify_topic` can extract values without a JSON parser.
@@ -322,29 +331,104 @@ async def _reset_handler(
     )
 
 
+# Cap tool-call rounds in a single turn. After a few rounds the model is
+# usually looping uselessly; better to bail than burn tokens.
+MAX_TOOL_ROUNDS = 4
+
+# Per tool result we send back to the model — cap the JSON we serialize
+# so a giant Tavily response doesn't blow context.
+TOOL_RESULT_CAP_CHARS = 6000
+
+
 async def _llm_reply(
     chat_id: int,
     user_text: str,
     message_id: str,
     extra_system: str = "",
 ) -> str:
-    """Call OpenRouter with system prompt (+ optional injected context) + transcript."""
+    """Call OpenRouter with system prompt + transcript, with tool-calling.
+
+    Loop:
+      1. Send messages + tool schemas to the model.
+      2. If the model returns a final assistant message, persist + return it.
+      3. If the model returns tool_calls, execute each one against
+         `dormy.telegram.tools.execute_tool`, append the assistant
+         tool-call message + each tool result, loop back to (1).
+      4. Bound at MAX_TOOL_ROUNDS rounds; emit a graceful fallback
+         if the model still wants to call tools after that.
+    """
     history = _history[chat_id]
     history.append(("user", user_text, message_id))
 
     system_full = SYSTEM_PROMPT + extra_system
-    messages: list[dict[str, str]] = [{"role": "system", "content": system_full}]
+    messages: list[dict] = [{"role": "system", "content": system_full}]
     for role, content, _ in history:
         messages.append({"role": role, "content": content})
 
     client = get_openrouter_client()
-    resp = await client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=messages,  # type: ignore[arg-type]
-        max_tokens=CHAT_MAX_TOKENS,
-        temperature=CHAT_TEMPERATURE,
-    )
-    reply = (resp.choices[0].message.content or "").strip()
+    reply: str = ""
+
+    for round_idx in range(MAX_TOOL_ROUNDS):
+        resp = await client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=messages,  # type: ignore[arg-type]
+            tools=TOOL_SCHEMAS,  # type: ignore[arg-type]
+            tool_choice="auto",
+            max_tokens=CHAT_MAX_TOKENS,
+            temperature=CHAT_TEMPERATURE,
+        )
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None) or []
+
+        if not tool_calls:
+            reply = (msg.content or "").strip()
+            break
+
+        # Append the assistant message with tool_calls (required by the spec
+        # so the model can match its own tool_call_ids on the next turn).
+        assistant_msg = {
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ],
+        }
+        messages.append(assistant_msg)
+
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            logger.info(
+                f"telegram tool call: {tc.function.name} args={args} round={round_idx}"
+            )
+            result = await execute_tool(tc.function.name, args)
+            content = json.dumps(result, ensure_ascii=False)[:TOOL_RESULT_CAP_CHARS]
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": content,
+                }
+            )
+
+    if not reply:
+        # Loop exhausted — model kept asking for tools. Fall back gracefully.
+        reply = (
+            "我查得有点久,你换个角度再问问看,或者把问题拆细一点。"
+            if any("\u4e00" <= c <= "\u9fff" for c in user_text)
+            else "I went a bit deep on that. Mind asking a tighter version?"
+        )
+
     history.append(("assistant", reply, f"a-{message_id}"))
     return reply
 
