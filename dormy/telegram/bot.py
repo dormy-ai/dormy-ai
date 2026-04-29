@@ -104,9 +104,11 @@ You have these live tools — use them when the question calls for current data:
 
 - recent_funding(sector?, stage?, days=30): curated funding-rounds database (TechCrunch + 36kr + Pandaily + startups.gallery, refreshed daily). Use when user wants real funding data — "who just raised in AI infra", "AI infra deals last 30 days" — instead of your training-data guesses.
 
-Default to using a tool when the question is about specific companies, recent events, or anything time-sensitive. Two tools max per turn — don't chain unnecessarily. After a tool returns, synthesize the result into a useful answer in the founder's language; don't just dump JSON.
+- list_skills(category?) + run_skill(name, input): the 42-skill GTM + fundraising playbook library (cold-email, page-cro, customer-research, pricing-strategy, launch-strategy, etc.). Categories: copy, cro, seo, distribution, growth, strategy, foundations, icp, fundraising. When the user asks for a concrete deliverable (cold email draft, landing-page critique, ICP analysis, pricing memo, launch plan), call list_skills to find the relevant playbook, then run_skill with a paragraph of their context. Pass the user's situation + target + constraints into `input` — quality of input drives quality of output. Use this instead of riffing freehand: the playbooks encode our IP.
 
-For everything else (pitch reviews, coaching, GTM frames, intro drafts), keep doing what you do — concrete drafts, decision frames, playbook excerpts."""
+Default to using a tool when the question is about specific companies, recent events, or anything time-sensitive — or when the user wants a structured deliverable (the skill library). Three tools max per turn — list_skills then run_skill counts as two, leave headroom. After a tool returns, synthesize the result into a useful answer in the founder's language; don't just dump JSON.
+
+For everything else (quick coaching, decision frames, off-cuff drafts), keep doing what you do — concrete answers in the founder's voice."""
 
 # Lightweight router. Output structure must match exactly so the regex
 # parser in `_classify_topic` can extract values without a JSON parser.

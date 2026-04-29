@@ -35,6 +35,7 @@ from dormy.mcp.tools import (
     recall,
     recent_funding,
     scan,
+    skill,
     watch,
     web_search,
 )
@@ -72,7 +73,11 @@ mcp: FastMCP = FastMCP(
         "(VC moves, recent rounds, founder takes). recent_funding queries "
         "the curated funding-news DB for rounds in a sector/stage window. "
         "deep_research runs MiroThinker for multi-step research questions "
-        "(slow, expensive — only when web_search isn't enough)."
+        "(slow, expensive — only when web_search isn't enough). "
+        "list_skills + run_skill expose the curated 42-skill playbook "
+        "library (cold-email, page-cro, pricing, customer-research, etc.) "
+        "as one-shot LLM workflows — call list_skills to discover, then "
+        "run_skill(name, input) to execute."
     ),
     transport_security=TransportSecuritySettings(
         # Reject hosts not in this list to prevent DNS rebinding attacks.
@@ -94,6 +99,7 @@ gtm.register(mcp)
 web_search.register(mcp)
 recent_funding.register(mcp)
 deep_research.register(mcp)
+skill.register(mcp)
 
 
 def http_app():
