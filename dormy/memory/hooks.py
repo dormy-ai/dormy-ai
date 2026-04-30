@@ -35,6 +35,7 @@ from dormy.memory.extractor import (
     ExtractionInput,
     run_batch,
 )
+from dormy.telemetry import log_tool_call
 
 
 def from_mcp_call(
@@ -42,19 +43,43 @@ def from_mcp_call(
     tool_input: dict[str, Any] | None = None,
     tool_output: Any = None,
 ) -> None:
-    """Trigger a fire-and-forget extractor batch from one MCP tool call.
+    """Trigger fire-and-forget side effects for one MCP tool call:
+      1. Telemetry: log the call into tool_call_log (status from output's
+         data_source field if present).
+      2. Memory extractor: kick off a Sonnet batch to extract observations.
 
-    Synchronous return; the actual work runs as an asyncio task scheduled
+    Synchronous return; both side effects run as asyncio tasks scheduled
     on the currently running event loop (FastMCP's loop in stdio/http modes).
-
-    Side effects: writes to user_observations, calls Sonnet 4.6 + embeddings.
     Both already log + swallow their own errors — failures here never
     propagate to the user-facing tool response.
     """
+    # 1. Telemetry — runs even when no user_id (still useful for catching
+    #    tool error bursts from the MCP surface in dev).
+    status = "ok"
+    error_msg: str | None = None
+    if hasattr(tool_output, "model_dump"):
+        try:
+            dumped = tool_output.model_dump()
+        except Exception:  # noqa: BLE001
+            dumped = {}
+        if isinstance(dumped, dict) and dumped.get("data_source") == "error":
+            status = "error"
+            error_msg = str(dumped.get("note") or "tool returned data_source=error")
+    log_tool_call(
+        source="mcp",
+        tool_name=tool_name,
+        status=status,
+        latency_ms=0,  # MCP wrappers don't time themselves; 0 = unknown
+        error_msg=error_msg,
+        args=tool_input,
+        user_id=get_current_user_id(),
+    )
+
+    # 2. Memory extractor — needs a user_id, otherwise can't attribute.
     user_id = get_current_user_id()
     if user_id is None:
         logger.debug(
-            f"hooks.from_mcp_call({tool_name}): no user_id, skipping"
+            f"hooks.from_mcp_call({tool_name}): no user_id, skipping extractor"
         )
         return
 
@@ -62,7 +87,7 @@ def from_mcp_call(
         loop = asyncio.get_running_loop()
     except RuntimeError:
         logger.debug(
-            f"hooks.from_mcp_call({tool_name}): no running loop, skipping"
+            f"hooks.from_mcp_call({tool_name}): no running loop, skipping extractor"
         )
         return
 

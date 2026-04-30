@@ -14,15 +14,19 @@ Adding a new tool:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from loguru import logger
 
+from dormy.mcp.tools.find import run_find_investors
+from dormy.mcp.tools.find_gtm import run_find_gtm
 from dormy.mcp.tools.page_fetch import run_fetch_page
 from dormy.mcp.tools.recent_funding import run_recent_funding
 from dormy.mcp.tools.web_search import run_web_search
 from dormy.skills.registry import VALID_CATEGORIES, registry
 from dormy.skills.runner import run_skill
+from dormy.telemetry import log_tool_call, maybe_alert_on_error
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -105,6 +109,92 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "minimum": 1,
                         "maximum": 50,
                         "default": 10,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_investors",
+            "description": (
+                "Look up the user's Inner Circle of VCs / angels (role: vc | "
+                "angel) from Supabase, filtered by sector and/or stage. Use "
+                "when the user is asking who to raise from, who to send a "
+                "deck to, who in their network is investing in X. Returns "
+                "three tiers: inner_circle_active (recently active), "
+                "inner_circle_resting (quiet), external_active (unknown, "
+                "needs warm intro). Inner entries include personal_notes + "
+                "warm_intro_path. For GTM advisors / agencies / operators, "
+                "use find_gtm instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sector": {
+                        "type": "string",
+                        "description": (
+                            "Sector tag exactly as stored in the contact's "
+                            "sectors[] array, e.g. 'ai-infra', 'fintech', "
+                            "'consumer'. Omit to match any sector."
+                        ),
+                    },
+                    "stage": {
+                        "type": "string",
+                        "enum": ["pre-seed", "seed", "A", "B", "growth"],
+                        "description": "Round stage. Omit to match any stage.",
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": "Max results per tier (1-20).",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 5,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_gtm",
+            "description": (
+                "Look up the user's Inner Circle of GTM resources — "
+                "agencies, advisors, operators, founder peers (role: "
+                "gtm-advisor | operator | founder-peer) from Supabase. Use "
+                "when the user is asking for help with launch / content / "
+                "growth / branding / UGC / pricing / hiring / dev-rel. "
+                "Returns matches with personal_notes + warm_intro_path. "
+                "For investors, use find_investors instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sector": {
+                        "type": "string",
+                        "description": (
+                            "Focus area, e.g. 'ai', 'consumer-tech', "
+                            "'fintech', 'edtech'. Omit to match any."
+                        ),
+                    },
+                    "tag": {
+                        "type": "string",
+                        "description": (
+                            "Tag from contact's tags[], e.g. 'ai-ugc', "
+                            "'creative-agency', 'pricing', 'tiktok'. "
+                            "Omit to match any."
+                        ),
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": "Max results (1-20).",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 5,
                     },
                 },
                 "required": [],
@@ -225,63 +315,120 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-async def execute_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch a tool call from the LLM. Returns a JSON-serializable dict.
-
-    Errors are returned as `{"error": "..."}` so the LLM can decide whether
-    to apologize, retry with different args, or fall back to a non-tool answer.
-    """
-    try:
-        if name == "web_search":
-            result = await run_web_search(
-                query=args.get("query", ""),
-                n=int(args.get("n", 5)),
-                depth=str(args.get("depth", "basic")),
-                include_answer=True,
-            )
-            return result.model_dump()
-        if name == "recent_funding":
-            result = await run_recent_funding(
-                sector=args.get("sector"),
-                stage=args.get("stage"),
-                days=int(args.get("days", 30)),
-                n=int(args.get("n", 10)),
-            )
-            return result.model_dump()
-        if name == "fetch_page":
-            result = await run_fetch_page(
-                url=str(args.get("url", "")),
-                max_chars=int(args.get("max_chars", 12000)),
-            )
-            return result.model_dump()
-        if name == "list_skills":
-            category = args.get("category")
-            entries = (
-                registry.list_by_category(category)
-                if category
-                else registry.list_all()
-            )
-            return {
-                "category": category,
-                "count": len(entries),
-                "skills": [
-                    {
-                        "name": e.name,
-                        "category": e.category,
-                        "description": e.description,
-                    }
-                    for e in entries
-                ],
-                "available_categories": VALID_CATEGORIES,
-            }
-        if name == "run_skill":
-            result = await run_skill(
-                name=str(args.get("name", "")),
-                input=str(args.get("input", "")),
-                model=args.get("model"),
-            )
-            return result.model_dump()
-    except Exception as e:
-        logger.warning(f"telegram tool {name} raised: {e}")
-        return {"error": f"{name} failed: {e}"}
+async def _dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Inner case-block dispatcher. Returns the tool's result dict, or
+    `{"error": ...}` if the name is unknown. May raise on tool failure —
+    the wrapper translates that into a telemetry-logged error result."""
+    if name == "web_search":
+        result = await run_web_search(
+            query=args.get("query", ""),
+            n=int(args.get("n", 5)),
+            depth=str(args.get("depth", "basic")),
+            include_answer=True,
+        )
+        return result.model_dump()
+    if name == "recent_funding":
+        result = await run_recent_funding(
+            sector=args.get("sector"),
+            stage=args.get("stage"),
+            days=int(args.get("days", 30)),
+            n=int(args.get("n", 10)),
+        )
+        return result.model_dump()
+    if name == "find_investors":
+        result = await run_find_investors(
+            sector=args.get("sector"),
+            stage=args.get("stage"),
+            n=int(args.get("n", 5)),
+        )
+        return result.model_dump()
+    if name == "find_gtm":
+        result = await run_find_gtm(
+            sector=args.get("sector"),
+            tag=args.get("tag"),
+            n=int(args.get("n", 5)),
+        )
+        return result.model_dump()
+    if name == "fetch_page":
+        result = await run_fetch_page(
+            url=str(args.get("url", "")),
+            max_chars=int(args.get("max_chars", 12000)),
+        )
+        return result.model_dump()
+    if name == "list_skills":
+        category = args.get("category")
+        entries = (
+            registry.list_by_category(category)
+            if category
+            else registry.list_all()
+        )
+        return {
+            "category": category,
+            "count": len(entries),
+            "skills": [
+                {
+                    "name": e.name,
+                    "category": e.category,
+                    "description": e.description,
+                }
+                for e in entries
+            ],
+            "available_categories": VALID_CATEGORIES,
+        }
+    if name == "run_skill":
+        result = await run_skill(
+            name=str(args.get("name", "")),
+            input=str(args.get("input", "")),
+            model=args.get("model"),
+        )
+        return result.model_dump()
     return {"error": f"unknown tool: {name}"}
+
+
+def _classify_outcome(result: dict[str, Any]) -> tuple[str, str | None]:
+    """Inspect a dispatch result; return (status, error_msg)."""
+    if "error" in result:
+        return "error", str(result["error"])
+    if result.get("data_source") == "error":
+        return "error", str(result.get("note") or "tool returned data_source=error")
+    return "ok", None
+
+
+async def execute_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch a tool call + record telemetry. Returns a JSON-serializable
+    dict. Errors come back as `{"error": ...}` (or a result with
+    `data_source="error"`) so the LLM can decide whether to apologize,
+    retry, or fall back. Telemetry is fire-and-forget — observability
+    failure never breaks the user reply path.
+    """
+    start = time.monotonic()
+    try:
+        result = await _dispatch(name, args)
+    except Exception as e:
+        latency_ms = int((time.monotonic() - start) * 1000)
+        err = f"{name} failed: {e}"
+        logger.warning(f"telegram tool {name} raised: {e}")
+        log_tool_call(
+            source="telegram",
+            tool_name=name,
+            status="error",
+            latency_ms=latency_ms,
+            error_msg=err,
+            args=args,
+        )
+        await maybe_alert_on_error("telegram", name, err)
+        return {"error": err}
+
+    latency_ms = int((time.monotonic() - start) * 1000)
+    status, error_msg = _classify_outcome(result)
+    log_tool_call(
+        source="telegram",
+        tool_name=name,
+        status=status,
+        latency_ms=latency_ms,
+        error_msg=error_msg,
+        args=args,
+    )
+    if status == "error":
+        await maybe_alert_on_error("telegram", name, error_msg)
+    return result

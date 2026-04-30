@@ -200,20 +200,34 @@ def knowledge_sync(
 ) -> None:
     """Sync Obsidian vault into Supabase.
 
-    By default this runs both passes:
-    1. Network/{Investors,Advisors}/*.md  →  contacts table
-    2. Fundraising/ + GTM/ + Playbooks/   →  knowledge_chunks (chunked + embedded)
+    By default this runs three passes:
+    1. Network/Investors/*.md  →  contacts table
+    2. Network/GTM/*.md        →  gtm_advisors table
+    3. Fundraising/ + GTM/ + Playbooks/  →  knowledge_chunks (chunked + embedded)
+
+    --contacts-only runs (1) + (2) and skips knowledge ingest.
     """
     import asyncio
 
     async def _run() -> None:
         if not knowledge_only:
-            from dormy.knowledge.ingest import sync_contacts_from_vault
+            from dormy.knowledge.ingest import (
+                sync_contacts_from_vault,
+                sync_gtm_from_vault,
+            )
 
-            stats = await sync_contacts_from_vault(vault)
+            c_stats = await sync_contacts_from_vault(vault)
             typer.secho(
-                f"✓ contacts: {stats.upserted} upserted · {stats.skipped} skipped "
-                f"· {stats.scanned} scanned",
+                f"✓ contacts: {c_stats.upserted} upserted · {c_stats.skipped} skipped "
+                f"· {c_stats.scanned} scanned",
+                fg=typer.colors.GREEN,
+                bold=True,
+            )
+
+            g_stats = await sync_gtm_from_vault(vault)
+            typer.secho(
+                f"✓ gtm:      {g_stats.upserted} upserted · {g_stats.skipped} skipped "
+                f"· {g_stats.scanned} scanned",
                 fg=typer.colors.GREEN,
                 bold=True,
             )
@@ -221,11 +235,11 @@ def knowledge_sync(
         if not contacts_only:
             from dormy.knowledge.knowledge_ingest import sync_knowledge_from_vault
 
-            stats = await sync_knowledge_from_vault(vault, max_files=max_files)
+            k_stats = await sync_knowledge_from_vault(vault, max_files=max_files)
             typer.secho(
-                f"✓ knowledge: {stats.files_scanned} files → "
-                f"{stats.chunks_written} chunks ({stats.files_skipped} skipped, "
-                f"{len(stats.errors)} errors)",
+                f"✓ knowledge: {k_stats.files_scanned} files → "
+                f"{k_stats.chunks_written} chunks ({k_stats.files_skipped} skipped, "
+                f"{len(k_stats.errors)} errors)",
                 fg=typer.colors.GREEN,
                 bold=True,
             )

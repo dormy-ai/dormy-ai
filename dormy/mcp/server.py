@@ -29,6 +29,7 @@ from dormy.mcp.auth import BYOKMiddleware
 from dormy.mcp.tools import (
     deep_research,
     find,
+    find_gtm,
     gtm,
     intro,
     page_fetch,
@@ -93,6 +94,7 @@ mcp: FastMCP = FastMCP(
 profile.register(mcp)
 scan.register(mcp)
 find.register(mcp)
+find_gtm.register(mcp)
 intro.register(mcp)
 watch.register(mcp)
 recall.register(mcp)

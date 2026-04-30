@@ -159,12 +159,22 @@ async def _build_from_mock(
 # ---------------------------------------------------------------------------
 
 
-async def _query_inner_contacts(sector: str | None, stage: str | None) -> list[dict]:
-    """Query Supabase for all matching Inner Circle contacts."""
+async def _query_inner_contacts(
+    sector: str | None,
+    stage: str | None,
+    roles: list[str] | None = None,
+) -> list[dict]:
+    """Query Supabase for matching Inner Circle investors.
+
+    `roles` filters the row's `role` column. Default is investor-only
+    (`['vc', 'angel']`) — pass an explicit list to widen.
+    """
     import asyncpg  # local import — only needed on DB path
 
     if not settings.database_url:
         return []
+
+    role_filter = list(roles) if roles is not None else ["vc", "angel"]
 
     # NOTE: every MCP call opens a fresh conn. Cheap enough for v0.1; switch to
     # `dormy.db.get_pool()` when we care about latency.
@@ -177,12 +187,14 @@ async def _query_inner_contacts(sector: str | None, stage: str | None) -> list[d
                    personal_notes, warm_intro_path, email, source_path
               FROM contacts
              WHERE tier = 'inner'
+               AND role = ANY($3::text[])
                AND ($1::text IS NULL OR $1 = ANY(sectors))
                AND ($2::text IS NULL OR $2 = ANY(stages))
              ORDER BY (recent_rounds IS NOT NULL) DESC, name
             """,
             sector,
             stage,
+            role_filter,
         )
         return [dict(r) for r in rows]
     finally:
@@ -314,6 +326,40 @@ async def _build_from_db(
 
 
 # ---------------------------------------------------------------------------
+# Top-level executor — shared by MCP tool + Telegram bot
+# ---------------------------------------------------------------------------
+
+
+async def run_find_investors(
+    sector: str | None = None,
+    stage: str | None = None,
+    n: int = 5,
+) -> FindInvestorsResult:
+    """Execute find_investors logic — investor-only (role: vc | angel).
+
+    Mirrors the run_* pattern in web_search.py / recent_funding.py so the
+    Telegram bot can share the same executor as the MCP tool.
+    """
+    try:
+        rows = await _query_inner_contacts(sector, stage, roles=["vc", "angel"])
+        if not rows:
+            logger.info("contacts table returned 0 rows — falling back to mock")
+            result = await _build_from_mock(sector, stage, n)
+        else:
+            result = await _build_from_db(rows, sector, stage, n)
+    except Exception as e:
+        logger.warning(f"contacts query failed, falling back to mock: {e}")
+        result = await _build_from_mock(sector, stage, n)
+
+    from_mcp_call(
+        "find_investors",
+        {"sector": sector, "stage": stage, "n": n},
+        result,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # MCP tool
 # ---------------------------------------------------------------------------
 
@@ -321,13 +367,15 @@ async def _build_from_db(
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         description=(
-            "Find matching investors using Dormy's Inner Circle × Active VC playbook. "
+            "Find matching investors (Inner Circle: vc | angel) using Dormy's "
+            "Inner Circle × Active VC playbook. "
             "Returns three tiers: inner_circle_active (you know + recent activity), "
             "inner_circle_resting (you know, currently quiet), and external_active "
             "(unknown, needs warm intro). Inner entries include personal_notes + "
             "warm_intro_path (Pro-tier private fields). "
             "Inner tier queries live Supabase (populated by `dormy knowledge sync`); "
-            "external tier still uses mock until Week 3 startups.gallery integration."
+            "external tier still uses mock until Week 3 startups.gallery integration. "
+            "For GTM advisors / agencies / operators, use find_gtm instead."
         ),
     )
     async def find_investors(
@@ -341,20 +389,4 @@ def register(mcp: "FastMCP") -> None:
         ),
         n: int = Field(default=5, ge=1, le=20, description="Max results per tier"),
     ) -> FindInvestorsResult:
-        try:
-            rows = await _query_inner_contacts(sector, stage)
-            if not rows:
-                logger.info("contacts table returned 0 rows — falling back to mock")
-                result = await _build_from_mock(sector, stage, n)
-            else:
-                result = await _build_from_db(rows, sector, stage, n)
-        except Exception as e:
-            logger.warning(f"contacts query failed, falling back to mock: {e}")
-            result = await _build_from_mock(sector, stage, n)
-
-        from_mcp_call(
-            "find_investors",
-            {"sector": sector, "stage": stage, "n": n},
-            result,
-        )
-        return result
+        return await run_find_investors(sector=sector, stage=stage, n=n)

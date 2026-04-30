@@ -44,5 +44,14 @@ class DormySettings(BaseSettings):
     # Production HTTP requests resolve user_id from BYOK key hash instead.
     user_id: str | None = None
 
+    # Observability — Telegram chat to receive admin alerts (3+ same-tool
+    # errors in 5 min, unhandled exceptions) + periodic digest summaries.
+    # Unset = alerts/digest are silently skipped (logged to loguru only).
+    alert_chat_id: str | None = None
+
+    # Digest cadence: "weekly" (default, Mondays 09:00 UTC) | "daily"
+    # (09:00 UTC) | "off" (disable).
+    digest_frequency: str = "weekly"
+
 
 settings = DormySettings()
