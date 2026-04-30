@@ -67,6 +67,8 @@ from dormy.telegram.invites import (
     user_by_telegram_chat_id,
 )
 from dormy.telegram.tools import TOOL_SCHEMAS, execute_tool
+from dormy.telemetry.alerts import alert_unhandled_exception
+from dormy.telemetry.digest import start_digest_loop
 
 # In-memory transcript per chat. Keyed by chat_id, value is bounded deque
 # of (role, content, message_id) tuples. Cleared on /reset, kept across
@@ -103,6 +105,10 @@ You have these live tools — use them when the question calls for current data:
 - web_search(query, n=5): real-time Tavily search. Use when the user asks about a specific company / website / person they referenced (e.g. "what does sekureclaw.ai do?") or wants fresh news / signals. Don't claim you can't access the web — you can.
 
 - recent_funding(sector?, stage?, days=30): curated funding-rounds database (TechCrunch + 36kr + Pandaily + startups.gallery, refreshed daily). Use when user wants real funding data — "who just raised in AI infra", "AI infra deals last 30 days" — instead of your training-data guesses.
+
+- find_investors(sector?, stage?, n=5): the user's Inner Circle of VCs / angels (role: vc | angel) from Supabase. Use when they ask who to raise from, who in their network is investing in X, who to send the deck to. Returns inner_circle_active + inner_circle_resting + external_active tiers, with personal_notes + warm_intro_path on inner entries. Always prefer this over web_search when the user is asking about THEIR network.
+
+- find_gtm(sector?, tag?, n=5): the user's Inner Circle of GTM resources — agencies, advisors, operators, founder peers (role: gtm-advisor | operator | founder-peer) from Supabase. Use when they ask for help with launch / content / growth / branding / UGC / pricing / hiring / dev-rel — anything non-fundraising where you'd reach out to a human. Returns matches with personal_notes + warm_intro_path.
 
 - fetch_page(url): fetch a URL's title + meta description + h1/h2 + body text. ALWAYS use this when the user gives you a URL and asks for any analysis (CRO critique, SEO audit, competitor profile, copy review, message critique) — pair it with run_skill on the same turn so the playbook has real page content to work with. Don't ask the user to paste their page; just fetch it.
 
@@ -666,6 +672,28 @@ async def _skill_callback_handler(
     )
 
 
+async def _on_startup(app: Application) -> None:  # noqa: ARG001
+    """Hook fired by python-telegram-bot after the asyncio loop is up.
+    Use it to schedule background tasks that need a running loop —
+    specifically the periodic telemetry digest."""
+    task = start_digest_loop()
+    if task is not None:
+        # Stash on the app so callers can cancel during shutdown if needed.
+        app.bot_data["_digest_task"] = task
+
+
+async def _telegram_error_handler(update: object, context: object) -> None:  # noqa: ARG001
+    """Catch unhandled exceptions in any handler — DM admin so silent
+    failures stop being silent. Also keeps the bot alive (handler
+    swallows so PTB doesn't kill the process)."""
+    error = getattr(context, "error", None)
+    where = "telegram_handler"
+    if isinstance(error, BaseException):
+        await alert_unhandled_exception(where, error)
+    else:
+        logger.warning(f"telegram error handler called with no error: {context}")
+
+
 def build_application() -> Application:
     """Construct the python-telegram-bot Application with handlers wired."""
     if not settings.telegram_bot_token:
@@ -675,6 +703,7 @@ def build_application() -> Application:
     app = (
         Application.builder()
         .token(settings.telegram_bot_token)
+        .post_init(_on_startup)
         .build()
     )
     app.add_handler(CommandHandler("start", _start_handler))
@@ -683,6 +712,7 @@ def build_application() -> Application:
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, _message_handler)
     )
+    app.add_error_handler(_telegram_error_handler)
     return app
 
 
