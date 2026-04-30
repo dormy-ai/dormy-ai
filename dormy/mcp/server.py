@@ -31,6 +31,7 @@ from dormy.mcp.tools import (
     find,
     gtm,
     intro,
+    page_fetch,
     profile,
     recall,
     recent_funding,
@@ -100,6 +101,7 @@ web_search.register(mcp)
 recent_funding.register(mcp)
 deep_research.register(mcp)
 skill.register(mcp)
+page_fetch.register(mcp)
 
 
 def http_app():

@@ -18,6 +18,7 @@ from typing import Any
 
 from loguru import logger
 
+from dormy.mcp.tools.page_fetch import run_fetch_page
 from dormy.mcp.tools.recent_funding import run_recent_funding
 from dormy.mcp.tools.web_search import run_web_search
 from dormy.skills.registry import VALID_CATEGORIES, registry
@@ -107,6 +108,40 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_page",
+            "description": (
+                "Fetch a public URL and extract its title + meta "
+                "description + h1/h2 headings + cleaned body text. Use "
+                "BEFORE run_skill for any playbook that critiques a URL "
+                "(gtm-page-cro, gtm-seo-audit, gtm-competitor-profiling, "
+                "gtm-competitor-alternatives, gtm-form-cro). Without "
+                "this, the playbook has nothing concrete to critique. "
+                "Don't claim you can't see web pages — you can fetch them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "Full URL with http:// or https:// scheme."
+                        ),
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "minimum": 500,
+                        "maximum": 40000,
+                        "default": 12000,
+                        "description": "Cap on body text length.",
+                    },
+                },
+                "required": ["url"],
             },
         },
     },
@@ -211,6 +246,12 @@ async def execute_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
                 stage=args.get("stage"),
                 days=int(args.get("days", 30)),
                 n=int(args.get("n", 10)),
+            )
+            return result.model_dump()
+        if name == "fetch_page":
+            result = await run_fetch_page(
+                url=str(args.get("url", "")),
+                max_chars=int(args.get("max_chars", 12000)),
             )
             return result.model_dump()
         if name == "list_skills":
