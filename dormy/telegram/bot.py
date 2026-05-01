@@ -55,13 +55,20 @@ from telegram.ext import (
 from dormy.config import settings
 from dormy.knowledge.retrieve import recall as knowledge_recall
 from dormy.llm.client import get_openrouter_client
-from dormy.mcp.auth import current_user_id
+from dormy.mcp.auth import current_user_id, current_user_key
 from dormy.memory.extractor import (
     ConversationMessage,
     ExtractionInput,
     run_batch,
 )
 from dormy.memory.observations import ObservationSource
+from dormy.telegram.byok import (
+    BYOKError,
+    clear_user_key,
+    get_key_metadata,
+    get_user_key,
+    set_user_key,
+)
 from dormy.telegram.invites import (
     consume_invite,
     user_by_telegram_chat_id,
@@ -114,12 +121,27 @@ You have these live tools — use them when the question calls for current data:
 
 - list_skills(category?) + run_skill(name, input): the 42-skill GTM + fundraising playbook library (cold-email, page-cro, customer-research, pricing-strategy, launch-strategy, etc.). Categories: copy, cro, seo, distribution, growth, strategy, foundations, icp, fundraising.
 
-CRITICAL skill workflow — the playbooks are Dormy's IP, you MUST execute them, not paraphrase:
-1. When the user asks for a concrete deliverable (cold email, landing-page critique, ICP analysis, pricing memo, launch plan, ad copy, SEO audit, etc.), this maps to a skill — go straight to run_skill if you know the slug, OR call list_skills(category=...) first to find it.
-2. list_skills returns ONLY names + trigger-descriptions. It does NOT contain the framework. You MUST follow up with run_skill(name, input) to actually load and apply the playbook. Never synthesize a deliverable from a list_skills response alone.
-3. Common slugs you can call directly: gtm-cold-email, gtm-page-cro, gtm-customer-research, gtm-pricing-strategy, gtm-launch-strategy, gtm-copywriting, gtm-ad-creative, gtm-seo-audit, gtm-email-sequence, gtm-onboarding-cro.
-4. For run_skill, pass a FULL paragraph of context as `input`: their situation + product + target + constraints + voice notes. Quality of input drives quality of output.
-5. DO NOT ask the user for clarification before running a skill. Run it with whatever info you have, even if partial. The playbook itself handles missing-info cases (it'll output a draft + a "to make this sharper, I need X" footer). Run-then-refine is always better than question-then-run, because the user came for a deliverable, not an interview. Once you've shown a real draft, THEN you can ask 1-2 follow-ups to improve it.
+DELIVERABLE WORKFLOW (NON-NEGOTIABLE):
+
+When the user asks for a concrete deliverable — cold email, landing-page critique, ICP, pricing memo, launch plan, ad copy, SEO audit, customer-research interview, competitor profile, etc. — the FINAL action of your turn MUST be run_skill on the matching playbook. The playbooks are Dormy's IP. Without run_skill, you did NOT use Dormy.
+
+Common slugs you can call directly without list_skills: gtm-cold-email, gtm-page-cro, gtm-customer-research, gtm-pricing-strategy, gtm-launch-strategy, gtm-copywriting, gtm-ad-creative, gtm-seo-audit, gtm-email-sequence, gtm-onboarding-cro, gtm-form-cro, gtm-paid-ads, gtm-content-strategy, gtm-marketing-ideas, gtm-launch-strategy, gtm-competitor-profiling, gtm-competitor-alternatives.
+
+EXAMPLE — "帮我写一封 cold email 给 Sequoia, AI infra Series A":
+  ✓ Round 0: run_skill(name="gtm-cold-email", input="<full paragraph of context>")
+  ✓ Or for richer context: Round 0: web_search + recent_funding, Round 1: run_skill(name="gtm-cold-email", input="<context + research findings>")
+  ✗ NEVER: write the email yourself, even after research
+  ✗ NEVER: ask 5 clarifying questions instead of running run_skill (the playbook handles partial info)
+
+EXAMPLE — "看 https://example.com 的 CRO":
+  ✓ Round 0: fetch_page(url=...). Round 1: run_skill(name="gtm-page-cro", input="<page content + user's situation>")
+  ✗ NEVER: critique the page yourself without run_skill
+  ✗ NEVER: ask user to paste the page
+
+OTHER WORKFLOW RULES:
+1. list_skills returns ONLY names + descriptions. It does NOT contain the framework. You MUST follow up with run_skill to actually apply the playbook.
+2. For run_skill input, pass a FULL paragraph: situation + product + target + constraints + voice notes. Quality of input drives quality of output.
+3. DO NOT ask the user for clarification BEFORE running a skill. Run it with whatever info you have. The playbook itself handles missing-info cases. After showing a real draft, THEN ask 1-2 follow-ups to refine.
 
 Tool budget: up to 4 rounds per turn. Use them. A typical deliverable turn = 1 round (run_skill directly) or 2 rounds (list_skills → run_skill). For research-heavy answers, you can also chain web_search → run_skill. Only stop tool-calling once you have enough to write a real answer in the founder's voice — don't stop early just to be safe.
 
@@ -350,6 +372,140 @@ async def _reset_handler(
     )
 
 
+# --- BYOK (per-user OpenRouter key) handlers ---
+
+NO_KEY_ONBOARDING = (
+    "你需要先绑定 OpenRouter key 才能用 Dormy。\n\n"
+    "1. 去 https://openrouter.ai/keys 创建一个 key (recharge $5 起步够用很久)\n"
+    "2. 然后发我:\n"
+    "   /setkey sk-or-v1-xxxxx\n\n"
+    "你的 key 只用来计费你这个账号的 LLM 调用。Dormy 不付费、不存外部副本。\n"
+    "其他命令: /whoami 看 key 状态 · /clearkey 解绑"
+)
+
+
+async def _setkey_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /setkey <openrouter_key> — validate + persist."""
+    chat = update.effective_chat
+    msg = update.message
+    if chat is None or msg is None:
+        return
+    user = await user_by_telegram_chat_id(chat.id)
+    if user is None:
+        await msg.reply_text(
+            "Bind your chat first via your invite link from heydormy.ai."
+        )
+        return
+    args = context.args or []
+    if not args:
+        await msg.reply_text(
+            "用法: `/setkey sk-or-v1-...`\n\n"
+            "去 https://openrouter.ai/keys 创建一个,然后发我那串 key。",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw_key = args[0].strip()
+    # Best-effort to delete the message containing the key from chat
+    # history so it doesn't sit visible. Telegram's API allows the bot
+    # to delete user messages it CAN see when the bot is admin or the
+    # message is recent. Failures are non-fatal.
+    try:
+        await context.bot.delete_message(chat_id=chat.id, message_id=msg.message_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"setkey: could not delete key message (non-fatal): {e}")
+
+    try:
+        await set_user_key(user.id, raw_key)
+    except BYOKError as e:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"❌ Key 验证失败: {e}",
+        )
+        return
+
+    # Show metadata back so user knows it worked + how much credit they have.
+    meta = await get_key_metadata(user.id)
+    if meta:
+        usage_part = ""
+        if meta.get("limit") is not None:
+            used = meta.get("usage") or 0
+            limit = meta.get("limit")
+            usage_part = f"\n额度: ${used:.2f} / ${limit:.2f}"
+        elif meta.get("usage") is not None:
+            usage_part = f"\n累计使用: ${meta['usage']:.2f}"
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=(
+                "✅ Key 验证通过并已保存。\n"
+                f"Key: `{meta['masked']}`"
+                f"{usage_part}\n\n"
+                "之后所有 LLM 调用走你这个 key,Dormy 不再付费。"
+            ),
+            parse_mode="Markdown",
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="✅ Key 已保存。",
+        )
+
+
+async def _whoami_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /whoami — show user identity + bound key status."""
+    chat = update.effective_chat
+    msg = update.message
+    if chat is None or msg is None:
+        return
+    user = await user_by_telegram_chat_id(chat.id)
+    if user is None:
+        await msg.reply_text(
+            "Not bound. Use your invite link from heydormy.ai."
+        )
+        return
+    meta = await get_key_metadata(user.id)
+    lines = [
+        f"邮箱: `{user.email}`",
+        f"User ID: `{user.id}`",
+    ]
+    if meta is None:
+        lines.append("OpenRouter key: *(none)* — 用 `/setkey` 绑定")
+    else:
+        lines.append(f"OpenRouter key: `{meta['masked']}`")
+        if meta.get("set_at"):
+            lines.append(f"绑定于: {meta['set_at'].strftime('%Y-%m-%d %H:%M UTC')}")
+        if meta.get("limit") is not None:
+            used = meta.get("usage") or 0
+            lines.append(f"额度: ${used:.2f} / ${meta['limit']:.2f}")
+        elif meta.get("usage") is not None:
+            lines.append(f"累计使用: ${meta['usage']:.2f}")
+        if meta.get("live_error"):
+            lines.append(f"⚠️ Live check: {meta['live_error']}")
+    await msg.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def _clearkey_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /clearkey — unbind. Bot will reply onboarding on next message."""
+    chat = update.effective_chat
+    msg = update.message
+    if chat is None or msg is None:
+        return
+    user = await user_by_telegram_chat_id(chat.id)
+    if user is None:
+        return
+    await clear_user_key(user.id)
+    await msg.reply_text(
+        "✅ Key 已解绑。下次聊天会提示你重新 `/setkey`。",
+        parse_mode="Markdown",
+    )
+
+
 # Cap tool-call rounds in a single turn. After a few rounds the model is
 # usually looping uselessly; better to bail than burn tokens.
 MAX_TOOL_ROUNDS = 4
@@ -532,6 +688,14 @@ async def _message_handler(
         )
         return
 
+    # BYOK gate — without a bound OpenRouter key, no LLM calls. This
+    # is the single point where a chatty user can't drain Dormy's
+    # shared key. Onboarding text walks them through /setkey.
+    user_key = await get_user_key(user.id)
+    if not user_key:
+        await msg.reply_text(NO_KEY_ONBOARDING)
+        return
+
     # 👀 emoji reaction on the user's message — instant "I see you" feedback
     # even if the LLM call takes a few seconds. Continuous typing pulse below
     # keeps the "is typing…" indicator alive for the duration of generation.
@@ -549,9 +713,11 @@ async def _message_handler(
         _typing_pulse(context.bot, chat_id, stop_typing)
     )
 
-    # Bind user_id to this turn so any downstream code (extractor, future
-    # MCP tool calls) can attribute writes.
-    token = current_user_id.set(user.id)
+    # Bind user_id AND user's BYOK key for this turn. ContextVar is
+    # inherited by asyncio.create_task children (extractor batches),
+    # so all downstream LLM calls route through the user's key.
+    user_id_token = current_user_id.set(user.id)
+    user_key_token = current_user_key.set(user_key)
     try:
         message_id = f"tg-{msg.message_id}-{uuid4().hex[:6]}"
 
@@ -579,6 +745,7 @@ async def _message_handler(
         # Otherwise, route the message to inject lighter RAG context (if GTM)
         # and decide whether to suggest a deeper workflow via inline button.
         rag_text = ""
+        routing_signal = ""
         if not active_skill_text:
             classification = await _classify_topic(msg.text)
             sub = classification["gtm_category"]
@@ -587,13 +754,29 @@ async def _message_handler(
             skill_slug = classification["skill"]
             if skill_slug != "none" and skill_slug in SKILL_LABELS:
                 suggested_skill = skill_slug
+                # Hard-code the routing signal into system context so the LLM
+                # can't decide to write the deliverable itself. This closes
+                # the gap where free-form `_llm_reply` would chain web_search
+                # then short-circuit instead of running the playbook.
+                full_slug = f"gtm-{skill_slug}"
+                routing_signal = (
+                    "\n\n## ROUTING SIGNAL (CONFIRMED INTENT)\n\n"
+                    "An upstream classifier identified this message as a "
+                    f"request for the `{full_slug}` playbook. You MUST call "
+                    f"`run_skill(name=\"{full_slug}\", input=<paragraph>)` "
+                    "as your FINAL tool call this turn. Optional: chain "
+                    "web_search / fetch_page / recent_funding BEFORE for "
+                    "context. Forbidden: writing the deliverable yourself, "
+                    "substituting a different skill, asking clarifying "
+                    "questions instead of running the playbook."
+                )
 
         try:
             reply = await _llm_reply(
                 chat_id,
                 msg.text,
                 message_id,
-                extra_system=active_skill_text or rag_text,
+                extra_system=active_skill_text or (rag_text + routing_signal),
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"telegram-bot LLM call failed for user {user.id}: {e}")
@@ -624,7 +807,8 @@ async def _message_handler(
             await asyncio.wait_for(typing_task, timeout=2.0)
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             typing_task.cancel()
-        current_user_id.reset(token)
+        current_user_id.reset(user_id_token)
+        current_user_key.reset(user_key_token)
 
 
 async def _skill_callback_handler(
@@ -708,6 +892,9 @@ def build_application() -> Application:
     )
     app.add_handler(CommandHandler("start", _start_handler))
     app.add_handler(CommandHandler("reset", _reset_handler))
+    app.add_handler(CommandHandler("setkey", _setkey_handler))
+    app.add_handler(CommandHandler("whoami", _whoami_handler))
+    app.add_handler(CommandHandler("clearkey", _clearkey_handler))
     app.add_handler(CallbackQueryHandler(_skill_callback_handler, pattern=r"^skill:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, _message_handler)
